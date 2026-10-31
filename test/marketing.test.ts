@@ -16,7 +16,7 @@ describe("Marketing scorecard", () => {
     const typed = await ok("prachi", "POST", "/api/leads", { name: "Typed Guest", phone: "9500000002", source: "whatsapp", campaign: "Diwali 2026" });
     expect((await ok("prachi", "GET", "/api/leads")).leads.find((l: any) => l.id === typed.id).campaign).toBe("Diwali 2026");
     await ok("prachi", "POST", "/api/leads", { name: "Untagged Guest", phone: "9500000003", source: "instagram" });
-    month = (await sql("SELECT substr(created_at,1,7) AS m FROM leads WHERE id = ?", typed.id))[0].m;
+    month = (await sql("SELECT substr(datetime(created_at, '+330 minutes'),1,7) AS m FROM leads WHERE id = ?", typed.id))[0].m; // the property's month
     // One lead answered fast, converted to a booking.
     await ok("prachi", "POST", `/api/leads/${typed.id}/contacted`);
     const b = await ok("prachi", "POST", "/api/bookings", { guest_name: "Typed Guest", guest_phone: "9500000002", check_in: "2027-03-10", check_out: "2027-03-12", rooms: [{ room_id: "loc_r1", nightly_rate_paise: 600000 }] });

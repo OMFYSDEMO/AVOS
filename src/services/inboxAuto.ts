@@ -38,14 +38,24 @@ async function automationActor(db: D1Database, propertyId: string): Promise<Acto
 
 const norm = (s: unknown) => String(s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
+/** Other names OTAs go by in STAAH emails. */
+const CHANNEL_ALIASES: Record<string, string> = { travelguru: "yatra", "yatra com": "yatra", mmt: "makemytrip", "make my trip": "makemytrip", goibibo: "goibibo", "booking com": "booking com", bdc: "booking com" };
+
 /** Match the email's channel name to a configured channel; hotel-collect emails prefer the "(pay at property)" twin. */
 async function resolveChannel(db: D1Database, propertyId: string, parsed: ParsedEmail): Promise<{ code: string } | null> {
   if (parsed.source === "swiftbook") return await one<{ code: string }>(db, "SELECT code FROM channels WHERE property_id = ? AND code = 'swiftbook' AND active = 1", propertyId);
   if (parsed.source === "bookingengine") return await one<{ code: string }>(db, "SELECT code FROM channels WHERE property_id = ? AND code = 'direct' AND active = 1", propertyId);
-  const want = norm(parsed.data.channel);
+  // STAAH names some channels by their connection ("travelguruxml", "Booking.com XML"): drop the plumbing, then
+  // match the channel's code, its name, or any part of a name like "Yatra / Travelguru".
+  const raw = norm(parsed.data.channel).replace(/\s*(xml|api|b2c|b2b|connect)$/g, "").replace(/(xml|api)$/, "").trim();
+  const want = CHANNEL_ALIASES[raw] ?? raw;
   if (!want) return null;
   const rows = await all<{ code: string; name: string; collection_type: string }>(db, "SELECT code, name, collection_type FROM channels WHERE property_id = ? AND active = 1", propertyId);
-  const base = rows.filter((r) => !/hotel_collect$/.test(r.code)).filter((r) => { const n = norm(r.name), c = norm(r.code); return n === want || c === want || n.startsWith(want) || want.startsWith(n) || c.replace(/ /g, "") === want.replace(/ /g, ""); });
+  const matches = (r: { code: string; name: string }) => {
+    const c = norm(r.code), parts = [norm(r.name), ...String(r.name).split(/[\/(),]+/).map(norm)].filter(Boolean);
+    return c === want || c.replace(/ /g, "") === want.replace(/ /g, "") || parts.some((n) => n === want || n.startsWith(want) || want.startsWith(n));
+  };
+  const base = rows.filter((r) => !/hotel_collect$/.test(r.code)).filter(matches);
   if (base.length !== 1) return null;
   if (parsed.data.collection_type === "hotel_collect") {
     const twin = rows.find((r) => r.code === `${base[0].code}_hotel_collect`);
@@ -104,7 +114,8 @@ export async function autoApply(db: D1Database, property: PropertyRow, item: { i
       const rates = roomIds.map((_, i) => shares && sumShares > 0 ? Math.round((Number(d.room_total_paise) * shares[i]) / sumShares / nights) : nightly);
       const result = await createBooking(db, actor, property, {
         guest: { name: String(d.guest_name), phone: d.guest_phone ?? null, email: d.guest_email ?? null },
-        channelCode: channel.code, externalRef: item.external_ref, checkIn, checkOut, rooms: roomIds.map((roomId, i) => ({ roomId, nightlyRatePaise: rates[i] })),
+        // Both numbers on the booking, "STAAH id (OTA ref)", so the OTA's own email for it later finds it too.
+        channelCode: channel.code, externalRef: item.external_ref && d.ota_ref && d.ota_ref !== item.external_ref ? `${item.external_ref} (${d.ota_ref})` : item.external_ref, checkIn, checkOut, rooms: roomIds.map((roomId, i) => ({ roomId, nightlyRatePaise: rates[i] })),
         inboxItemId: item.id, isOta: channel.code !== "direct", adults: d.adults ?? undefined, children: d.children ?? undefined, notes: `auto-booked from ${item.source} email: ${item.subject}`,
       });
       const b = new Batch(db, actor);
@@ -164,6 +175,14 @@ export async function autoApply(db: D1Database, property: PropertyRow, item: { i
       await notifyRole(b, property.id, "property", "inbox_auto_paid", `${d.via ?? "Airpay"} ${Number(d.amount_paise) / 100} received for ${bk[0].guest_name} (order ${d.order_id})`, { kind: "payment", id: pay.id });
       await b.run();
       return { applied: true, what: "paid", id: pay.id };
+    }
+    if (item.kind === "channel_alert") {
+      // Say whether the booking it is about reached AVOS, and what to fix in STAAH.
+      const ref = String(d.ota_ref ?? "");
+      const bk = ref ? await one<{ guest_name: string; check_in: string }>(db, `SELECT g.name AS guest_name, b.check_in FROM bookings b JOIN guests g ON g.id = b.guest_id WHERE b.property_id = ? AND ${REF_MATCH}`, property.id, ...refArgs(ref)) : null;
+      const card = ref && !bk ? await one<{ id: string }>(db, "SELECT id FROM inbox_items WHERE property_id = ? AND kind = 'new_reservation' AND parsed_json LIKE ? AND status = 'pending'", property.id, `%"ota_ref":"${ref}"%`) : null;
+      const where = bk ? `the booking (${bk.guest_name}, ${bk.check_in}) is in AVOS` : card ? "the booking is waiting in the inbox: book it" : "no booking for it has reached AVOS yet: check the OTA extranet";
+      return { applied: false, note: `STAAH could not map the OTA's rate plan for reservation ${ref || "?"}: ${where}. Map the rate plan in STAAH so availability stays in sync on every channel, then dismiss.` };
     }
     if (item.kind === "bank_alert") {
       if (parsed.confidence !== "high") return { applied: false, note: "could not read the amount or date on the bank alert" };

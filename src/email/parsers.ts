@@ -1,14 +1,14 @@
 import { rupeesToPaise } from "../domain/money";
 import { parseLooseDate } from "../domain/dates";
 
-export const PARSER_VERSION = "2026-10-27c";
+export const PARSER_VERSION = "2026-10-31a";
 
 /** "Villa", "Entire villa", "Whole villa", "Full villa": the booking engine's name for all rooms together. */
 export const isWholeVilla = (roomName: unknown) => /^(the\s+)?(entire|whole|full|complete|exclusive)?\s*villa\b/i.test(String(roomName ?? "").trim());
 
 export interface ParsedEmail {
   source: "staah" | "swiftbook" | "airpay" | "bookingengine" | "staahmax" | "bank" | "unknown";
-  kind: "new_reservation" | "modification" | "cancellation" | "payment" | "payment_request" | "bank_alert" | "unknown";
+  kind: "new_reservation" | "modification" | "cancellation" | "payment" | "payment_request" | "bank_alert" | "channel_alert" | "unknown";
   external_ref: string | null;
   data: Record<string, unknown>;
   confidence: "high" | "low";
@@ -300,6 +300,12 @@ export function parseInboundEmail(from: string, rawSubject: string, html?: strin
   if (/Payment link\s*-\s*reference/i.test(subject) || (/PAYMENT REQUEST/.test(body) && /Amount Due/i.test(body))) return parseStaahMaxRequest(subject, body, year);
   const looksEngine = f.includes("mybookingsite") || fwdFrom.includes("mybookingsite") || (/^\s*\((Confirmed|Cancelled|Canceled|Modified)\)/i.test(subject) && /Reservation\s*No/i.test(subject)) || (/Booking Confirmation/i.test(body) && /Booking ID/i.test(body) && /Guest Information/i.test(body));
   if (looksEngine) return parseBookingEngine(subject, body, year);
+  // STAAH warning that an OTA sent a rate plan it has no mapping for: the booking still comes through, but the
+  // channel manager may not have moved availability for it. It needs a person, with the reservation it is about.
+  if (looksStaah && /Unmapped Rate Plan/i.test(subject)) {
+    const ota = grab(subject, /-\s*([A-Za-z0-9]{6,})\s+Unmapped Rate Plan/i) ?? grab(body, /Reservation\s*(?:No\.?|Id|#)?\s*:?\s*([A-Za-z0-9]{6,})/i);
+    return { source: "staah", kind: "channel_alert", external_ref: ota, data: { alert: "unmapped_rate_plan", ota_ref: ota, rate_plan: grab(body, /Rate\s*Plan\s*:?\s*([^\n]+)/i), channel: grab(body, /Channel(?: Name)?\s*:?\s*([^\n]+)/i) }, confidence: ota ? "high" : "low" };
+  }
   if (looksStaah) return parseStaah(subject, body, year);
   if (looksSwiftbook) return parseSwiftbook(subject, body, year);
   if (looksAirpay) { const r = parseAirpay(subject, body); const sent = forwardedSentAt(whole); if (sent) r.data.sent_at = sent; return r; }

@@ -153,7 +153,7 @@ describe("Inbox automation", () => {
     expect(ing.parsed.confidence).toBe("high");
     expect(ing.status).toBe("approved"); expect(ing.auto.what).toBe("booked");
     const bk = (await sql("SELECT channel_id, room_total_paise, external_ref FROM bookings WHERE id = ?", ing.booking_id))[0] as any;
-    expect(bk.channel_id).toBe("ch_goibibo"); expect(bk.room_total_paise).toBe(1170450); expect(bk.external_ref).toBe("1060900000001400");
+    expect(bk.channel_id).toBe("ch_goibibo"); expect(bk.room_total_paise).toBe(1170450); expect(bk.external_ref).toBe("1060900000001400 (0190589681)");
     expect((await sql("SELECT room_id FROM room_nights WHERE booking_id = ?", ing.booking_id))[0].room_id).toBe("loc_r2");
     // Re-reading a waiting card re-runs the parser and automation; a done card is left alone.
     expect((await api("prachi", "POST", `/api/inbox/${ing.id}/reparse`)).status).toBe(409);
@@ -188,6 +188,21 @@ describe("Inbox automation", () => {
     const again = await ok("prachi", "POST", "/api/inbox/ingest", { from: "noreply@staah.com", subject: "New Reservation Booking.com for Other Reservation No:5600000002 (7000000000009902) - The Meadows Varkala", text: text.replace(/7000000000009901 \(5600000001\)/g, "7000000000009902 (5600000002)") });
     expect(again.parsed.data.room_types).toHaveLength(2);
     expect(again.status).toBe("pending"); expect(again.auto.note).toMatch(/Superior/);
+  });
+
+  it("books a STAAH 'travelguruxml' reservation into Yatra, keeps both references, and explains an unmapped rate plan", async () => {
+    await sql("INSERT OR IGNORE INTO channels (id, property_id, code, name, collection_type, commission_bp) VALUES ('ch_yatra', 'prop_meadows', 'yatra', 'Yatra / Travelguru', 'channel_collect', 2000)");
+    const text = `Reservation Confirmation\nChannel Name: travelguruxml\nBookings Status: Confirmed\nBooking Id#: P0009999901 (1060900000009427)\nGuest Details\nCONTACT NAME\nTest Traveller\nBooking Details\nROOM TYPE\nSuperior - Deluxe Room(04 Apr 25 ~ 04 Apr 27) - B2C\nNO OF ROOMS\n1\nCHECK-IN\n21 Nov 2027\nCHECK-OUT\n22 Nov 2027\nNO OF NIGHTS\n1\nDATE\n21 Nov 2027\nGUEST NAME\nTest Traveller\nADULTS\n2\nCHILDREN\n0\nAMOUNT\nINR6,650.00\nAdditional Information:\nPayment Type: Channel Collect\nCommission : INR 1,330.00\nRoom Total : INR 6,650.00\nTotal Taxes : INR 333.00\nTotal (All Inclusive): INR 6,983.00`;
+    const ing = await ok("prachi", "POST", "/api/inbox/ingest", { from: "noreply@staah.com", subject: "New Reservation travelguruxml for Traveller Reservation No:P0009999901 (1060900000009427) - The Meadows Varkala", text });
+    expect(ing.parsed.data.channel).toBe("travelguruxml");
+    expect(ing.status).toBe("approved"); expect(ing.auto.what).toBe("booked");
+    const bk = (await sql("SELECT channel_id, external_ref FROM bookings WHERE id = ?", ing.booking_id))[0];
+    expect(bk).toEqual({ channel_id: "ch_yatra", external_ref: "1060900000009427 (P0009999901)" });
+    // STAAH's warning for the same reservation now says where the booking is and what to fix.
+    const alert = await ok("prachi", "POST", "/api/inbox/ingest", { from: "noreply@staah.com", subject: "The Meadows Varkala - P0009999901 Unmapped Rate Plan", text: "Dear Channel Manager.\nA reservation was received for a rate plan that is not mapped." });
+    expect(alert.parsed).toMatchObject({ source: "staah", kind: "channel_alert", external_ref: "P0009999901" });
+    expect(alert.status).toBe("pending");
+    expect(alert.auto.note).toMatch(/could not map the OTA's rate plan for reservation P0009999901: the booking \(Test Traveller, 2027-11-21\) is in AVOS/);
   });
 
   it("matches a cancellation to a stay that carries the migrated 'STAAH id (OTA ref)' reference", async () => {

@@ -114,12 +114,12 @@ export async function marketingScorecard(db: D1Database, propertyId: string, mon
         SUM(CASE WHEN l.status = 'lost' THEN 1 ELSE 0 END) AS lost,
         COALESCE(SUM(CASE WHEN l.status = 'won' AND b.status NOT IN ('cancelled','no_show') THEN b.nights ELSE 0 END), 0) AS room_nights,
         COALESCE(SUM(CASE WHEN l.status = 'won' AND b.status NOT IN ('cancelled','no_show') THEN b.gross_paise ELSE 0 END), 0) AS revenue_paise`;
-  const bySource = await all<any>(db, `SELECT substr(l.created_at,1,7) AS month, l.source, ${leadCols}
+  const bySource = await all<any>(db, `SELECT substr(datetime(l.created_at, '+330 minutes'),1,7) AS month, l.source, ${leadCols}
      FROM leads l LEFT JOIN bookings b ON b.id = l.booking_id
-     WHERE l.property_id = ? AND substr(l.created_at,1,10) BETWEEN ? AND ? GROUP BY month, l.source ORDER BY month, l.source`, propertyId, from, to);
+     WHERE l.property_id = ? AND substr(datetime(l.created_at, '+330 minutes'),1,10) BETWEEN ? AND ? GROUP BY month, l.source ORDER BY month, l.source`, propertyId, from, to);
   const byCampaign = await all<any>(db, `SELECT COALESCE(NULLIF(l.campaign,''), '(no campaign)') AS campaign, l.source, ${leadCols}
      FROM leads l LEFT JOIN bookings b ON b.id = l.booking_id
-     WHERE l.property_id = ? AND substr(l.created_at,1,10) BETWEEN ? AND ? GROUP BY campaign, l.source ORDER BY leads DESC`, propertyId, from, to);
+     WHERE l.property_id = ? AND substr(datetime(l.created_at, '+330 minutes'),1,10) BETWEEN ? AND ? GROUP BY campaign, l.source ORDER BY leads DESC`, propertyId, from, to);
   const spend = await all<any>(db, `SELECT substr(on_date,1,7) AS month, COALESCE(NULLIF(campaign,''), '(no campaign)') AS campaign, SUM(amount_paise) AS spend_paise, COUNT(*) AS lines
      FROM expenses WHERE property_id = ? AND category = 'marketing' AND voided_at IS NULL AND on_date BETWEEN ? AND ? GROUP BY month, campaign ORDER BY month`, propertyId, from, to);
   const perMonth = months.map((m) => {
