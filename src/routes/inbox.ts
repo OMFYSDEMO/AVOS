@@ -88,6 +88,10 @@ async function initialStatus(env: Env, propertyId: string, parsed: ParsedEmail, 
   if (parsed.external_ref && parsed.kind === "new_reservation") {
     const dup = await one(env.DB, `SELECT id FROM bookings WHERE property_id = ? AND ${REF_MATCH}`, propertyId, ...refArgs(parsed.external_ref));
     if (dup) return "duplicate";
+    // The same stay under its other number: STAAH's email carries the OTA's reference too, and the OTA's own
+    // voucher may have booked it already (or the other way round).
+    const ota = String((parsed.data as any).ota_ref ?? "");
+    if (ota && ota !== parsed.external_ref && await one(env.DB, `SELECT id FROM bookings WHERE property_id = ? AND ${REF_MATCH}`, propertyId, ...refArgs(ota))) return "duplicate";
     // The same notification forwarded twice: the earlier card stands, the later one is a duplicate of it.
     const earlier = await one(env.DB, "SELECT id FROM inbox_items WHERE property_id = ? AND kind = 'new_reservation' AND external_ref = ? AND status IN ('pending','approved') AND id != ? AND received_at <= ?",
       propertyId, parsed.external_ref, self?.id ?? "", self?.received_at ?? "9999");

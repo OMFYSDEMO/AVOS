@@ -1,13 +1,13 @@
 import { rupeesToPaise } from "../domain/money";
 import { parseLooseDate } from "../domain/dates";
 
-export const PARSER_VERSION = "2026-10-31a";
+export const PARSER_VERSION = "2026-10-31b";
 
 /** "Villa", "Entire villa", "Whole villa", "Full villa": the booking engine's name for all rooms together. */
 export const isWholeVilla = (roomName: unknown) => /^(the\s+)?(entire|whole|full|complete|exclusive)?\s*villa\b/i.test(String(roomName ?? "").trim());
 
 export interface ParsedEmail {
-  source: "staah" | "swiftbook" | "airpay" | "bookingengine" | "staahmax" | "bank" | "unknown";
+  source: "staah" | "swiftbook" | "airpay" | "bookingengine" | "staahmax" | "yatra" | "bank" | "unknown";
   kind: "new_reservation" | "modification" | "cancellation" | "payment" | "payment_request" | "bank_alert" | "channel_alert" | "unknown";
   external_ref: string | null;
   data: Record<string, unknown>;
@@ -282,6 +282,39 @@ export function parseStaahMaxPayment(subject: string, body: string): ParsedEmail
   return { source: "staahmax", kind: "payment", external_ref: order, data, confidence: order && data.amount_paise && data.success ? "high" : "low" };
 }
 
+/**
+ * Yatra (Travelguru) hotel voucher from donotreply@yatra.com: "VOUCHER NUMBER P0002595785", the stay, the room,
+ * the tariff and Yatra's own payout sum (gross − commission incl. GST − TCS − TDS). Pre-pay: Yatra collects.
+ * The voucher number is the OTA reference STAAH also carries, so either email finds a booking made from the other.
+ */
+export function parseYatra(subject: string, body: string, year: number): ParsedEmail {
+  const cancelled = /cancel/i.test(subject) || /booking (?:has been |is )?cancell?ed/i.test(body);
+  const kind: ParsedEmail["kind"] = cancelled ? "cancellation" : /amend|modif/i.test(subject) ? "modification" : "new_reservation";
+  const voucher = grab(body, /VOUCHER NUMBER\s*:?\s*([A-Z0-9]{6,})/i) ?? grab(subject, /\b(P\d{8,})\b/);
+  const amount = (label: string) => { const v = grab(body, new RegExp(label + "\\s*:?\\s*(?:INR|Rs\\.?|₹)?\\s*([\\d,]+(?:\\.\\d+)?)", "i")); return v ? rupeesToPaise(v) : null; };
+  const ci = grab(body, /Check in date\s*:?\s*(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4})/i), co = grab(body, /Check out date\s*:?\s*(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4})/i);
+  const roomName = grab(body, /Room Name\s*:?\s*([^\n]+)/i);
+  const data = {
+    channel: "Yatra", ota_ref: voucher, vendor: "Yatra (Travelguru)",
+    guest_name: grab(body, /Name of Guest\s*:?\s*([^\n]+)/i), guest_email: grab(body, /Guest Email Address\s*:?\s*([\w.+-]+@[\w-]+\.[\w.-]+)/i),
+    guest_phone: grab(body, /Guest Phone Number\s*:?\s*([+\d][\d \-]{7,})/i),
+    room_name: roomName ? roomName.replace(/\s+room$/i, "").trim() : null, room_name_full: grab(body, /Type of room\s*:?\s*([^\n]+)/i),
+    rooms: Number(grab(body, /Number of rooms\s*:?\s*(\d+)/i) ?? "1") || 1,
+    nights: Number(grab(body, /Duration\(Nights\/Hours\)\s*:?\s*(\d+)/i) ?? "0") || null,
+    adults: Number(grab(body, /Adults\s*:?\s*(\d+)/i) ?? "0") || null, children: Number(grab(body, /Children\s*:?\s*(\d+)/i) ?? "0") || null,
+    check_in: ci ? parseLooseDate(ci, year) : null, check_out: co ? parseLooseDate(co, year) : null,
+    room_total_paise: amount("Total Room Charges"), room_total_is_ex_gst: true, taxes_paise: amount("Other Charges"),
+    total_incl_gst_paise: amount("\\(A\\) Hotel Gross Charges") ?? amount("Hotel Gross Charges"),
+    commission_paise: amount("Yatra \\(Travelguru\\) Commission"), commission_gst_paise: amount("GST @ 18%[^\\n]*?\\)"),
+    tcs_paise: amount("\\(C\\) TCS[^\\n]*?\\)"), tds_paise: amount("\\(D\\) TDS[^\\n]*?194 ?O"),
+    payout_paise: amount("to pay Hotel \\(A - B - C - D\\)"),
+    collection_type: /PRE-?PAY/i.test(body) ? "channel_collect" : /pay at hotel|hotel collect/i.test(body) ? "hotel_collect" : "channel_collect",
+    status_text: cancelled ? "Cancelled" : "Confirmed",
+  };
+  const confidence = voucher && data.guest_name && data.check_in && data.check_out && (kind === "cancellation" || data.room_total_paise !== null) ? "high" : "low";
+  return { source: "yatra" as ParsedEmail["source"], kind, external_ref: voucher, data, confidence };
+}
+
 export function parseInboundEmail(from: string, rawSubject: string, html?: string, text?: string, now = new Date()): ParsedEmail {
   const whole = textOf(html, text);
   const body = forwardedPart(whole);          // a forwarded notification is read past the forwarder's signature
@@ -295,6 +328,8 @@ export function parseInboundEmail(from: string, rawSubject: string, html?: strin
   const looksAirpay = f.includes("airpay") || fwdFrom.includes("airpay") || /airpay/i.test(subject) || (/Airpay\s*Id/i.test(body) && /airpay\.co\.in/i.test(body));
   const looksBank = f.includes("idfcfirstbank") || fwdFrom.includes("idfcfirstbank") || /transaction alert from .*bank/i.test(subject) || (/has been (credited|debited) with (INR|Rs)/i.test(body) && /A\/C/i.test(body));
   if (looksBank) return parseBankAlert(subject, body);
+  // Yatra's own voucher (it also reaches us through STAAH; the shared voucher number keeps them one booking).
+  if (f.includes("yatra.com") || fwdFrom.includes("yatra.com") || f.includes("travelguru") || (/VOUCHER NUMBER/i.test(body) && /Yatra \(Travelguru\)/i.test(body))) return parseYatra(subject, body, year);
   // STAAH Max payment received / payment request: sent from the booking engine's address, so they are told apart first.
   if (/received payment through STAAH Max/i.test(subject) || (/PAYMENT RECEIVED/.test(body) && /STAAH Max Online Payment/i.test(body))) return parseStaahMaxPayment(subject, body);
   if (/Payment link\s*-\s*reference/i.test(subject) || (/PAYMENT REQUEST/.test(body) && /Amount Due/i.test(body))) return parseStaahMaxRequest(subject, body, year);

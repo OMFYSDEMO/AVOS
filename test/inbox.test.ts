@@ -205,6 +205,30 @@ describe("Inbox automation", () => {
     expect(alert.auto.note).toMatch(/could not map the OTA's rate plan for reservation P0009999901: the booking \(Test Traveller, 2027-11-21\) is in AVOS/);
   });
 
+  it("reads Yatra's own voucher, and one stay stays one booking whichever of Yatra and STAAH writes first", async () => {
+    await sql("INSERT OR IGNORE INTO channels (id, property_id, code, name, collection_type, commission_bp) VALUES ('ch_yatra', 'prop_meadows', 'yatra', 'Yatra / Travelguru', 'channel_collect', 2000)");
+    const voucher = (ref: string, guest: string, ci: string, co: string) => `Write to us : hotelhelpdesk@travelguru.com\nThis is a PRE-PAY Booking\nKINDLY ISSUE INVOICE TO THE CUSTOMER FOR THIS BOOKING AT THE TIME OF CHECK-OUT\nVOUCHER NUMBER\t${ref}\t\nDear Business Partner,\nWe thank you for your continued support to Yatra (Travelguru). Please confirm the following booking that is done as per our allocation.\nName of Hotel & City\tThe Meadows Varkala, Varkala, IN\nName of Guest\t${guest}\nGuest Email Address\tguest@example.com\nGuest Phone Number\t91-9000000009\nBooking Date\t31 Oct 2026\nCheck in date\t${ci}\nCheck out date\t${co}\nCheck in Time\t14:00\nCheck out Time\t11:00\nDuration(Nights/Hours)\t1/0\nRoom Name\tExecutive Room\nType of room\tExecutive Room with Breakfast-Yatra Special Rate\nNumber of rooms\t1\nAdults\t2\nChildren\t0 ( years)\nRate Plan Type\tYATRA CONTRACTED\nTariff Applicable:\nCheck in date\tCheck out date\tNo. of Nights\tCurrency\tRate per Night\tRoom Rate\n${ci}\t${co}\t1\tINR\t6650.00\t6650.00\nTariff Details:\n\nTotal Room Charges\t6650.00\nOther Charges\t333.00\n(A) Hotel Gross Charges\t6983.00\nYatra (Travelguru) Commission\t1330.00\nGST @ 18% (includes IGST/CGST/SGST. Kindly, refer to the attached invoice for exact GST breakup)\t239.40\n(B) Yatra (Travelguru) Commission (including GST)\t1569.40\n(C) TCS @0.5% (includes CGST/SGST)\t33.26\n(D) TDS @0.1% TDS under Section 194 O\t6.65\nYatra (Travelguru) to pay Hotel (A - B - C - D)\t5373.69\nConfirm Hotel Booking\nDO NOT DISCLOSE CONTRACTED RATES TO GUESTS`;
+    // 1. Yatra's voucher first: it books itself; STAAH's email for the same stay is then a duplicate.
+    const y1 = await ok("prachi", "POST", "/api/inbox/ingest", { from: "donotreply@yatra.com", subject: "Yatra Hotel Booking Voucher P0009999911", text: voucher("P0009999911", "Voucher First", "21 Dec 2027", "22 Dec 2027") });
+    expect(y1.parsed).toMatchObject({ source: "yatra", kind: "new_reservation", external_ref: "P0009999911" });
+    expect(y1.parsed.data).toMatchObject({ guest_name: "Voucher First", room_name: "Executive", check_in: "2027-12-21", check_out: "2027-12-22", room_total_paise: 665000, taxes_paise: 33300, total_incl_gst_paise: 698300, commission_paise: 133000, commission_gst_paise: 23940, tcs_paise: 3326, tds_paise: 665, payout_paise: 537369, collection_type: "channel_collect" });
+    expect(y1.auto.what).toBe("booked");
+    const staah = (ota: string, staahId: string, guest: string, ci: string, co: string) => `Reservation Confirmation\nChannel Name: travelguruxml\nBookings Status: Confirmed\nBooking Id#: ${ota} (${staahId})\nCONTACT NAME\n${guest}\nROOM TYPE\nExecutive - Executive Room - B2C\nNO OF ROOMS\n1\nCHECK-IN\n${ci}\nCHECK-OUT\n${co}\nGUEST NAME\n${guest}\nADULTS\n2\nAMOUNT\nINR6,650.00\nAdditional Information:\nPayment Type: Channel Collect\nRoom Total : INR 6,650.00\nTotal Taxes : INR 333.00\nTotal (All Inclusive): INR 6,983.00`;
+    const s1 = await ok("prachi", "POST", "/api/inbox/ingest", { from: "noreply@staah.com", subject: `New Reservation travelguruxml for First Reservation No:P0009999911 (1060900000009911) - The Meadows Varkala`, text: staah("P0009999911", "1060900000009911", "Voucher First", "21 Dec 2027", "22 Dec 2027") });
+    expect(s1.status).toBe("duplicate");
+    expect((await sql("SELECT COUNT(*) AS n FROM bookings WHERE external_ref LIKE '%P0009999911%'"))[0].n).toBe(1);
+    // 2. STAAH first, then Yatra's voucher: the voucher is the duplicate.
+    const s2 = await ok("prachi", "POST", "/api/inbox/ingest", { from: "noreply@staah.com", subject: `New Reservation travelguruxml for Second Reservation No:P0009999912 (1060900000009912) - The Meadows Varkala`, text: staah("P0009999912", "1060900000009912", "Staah First", "23 Dec 2027", "24 Dec 2027") });
+    expect(s2.auto.what).toBe("booked");
+    const y2 = await ok("prachi", "POST", "/api/inbox/ingest", { from: "donotreply@yatra.com", subject: "Yatra Hotel Booking Voucher P0009999912", text: voucher("P0009999912", "Staah First", "23 Dec 2027", "24 Dec 2027") });
+    expect(y2.status).toBe("duplicate");
+    // 3. Yatra cancels by its own voucher number: the STAAH-made booking is found and cancelled.
+    const c2 = await ok("prachi", "POST", "/api/inbox/ingest", { from: "donotreply@yatra.com", subject: "Yatra Hotel Booking Cancelled P0009999912", text: voucher("P0009999912", "Staah First", "23 Dec 2027", "24 Dec 2027").replace("Please confirm the following booking", "This booking has been cancelled") });
+    expect(c2.parsed.kind).toBe("cancellation");
+    expect(c2.auto.what).toBe("cancelled");
+    expect((await sql("SELECT status FROM bookings WHERE id = ?", s2.booking_id))[0].status).toBe("cancelled");
+  });
+
   it("matches a cancellation to a stay that carries the migrated 'STAAH id (OTA ref)' reference", async () => {
     const r = await ok("prachi", "POST", "/api/bookings", { guest_name: "Migrated Guest", guest_phone: "9222222222", channel_code: "agoda", external_ref: "1060900000001308 (2049201329)", check_in: "2027-02-10", check_out: "2027-02-11", rooms: [{ room_id: "loc_r4", nightly_rate_paise: 500000 }] });
     const canc = await ok("prachi", "POST", "/api/inbox/ingest", { from: "noreply@staah.com", subject: "Cancelled Reservation Agoda for Migrated Reservation No:2049201329 (1060900000001308) - The Meadows Varkala", text: "Channel Name: Agoda\nBookings Status: Cancelled\nBooking Id#: 1060900000001308 (2049201329)\nGUEST NAME\nMigrated Guest\nCHECK-IN\n10 Feb 2027\nCHECK-OUT\n11 Feb 2027" });

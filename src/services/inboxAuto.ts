@@ -128,7 +128,9 @@ export async function autoApply(db: D1Database, property: PropertyRow, item: { i
     }
     if (item.kind === "cancellation") {
       if (!item.external_ref) return { applied: false, note: "no booking reference in the email" };
-      const open = await all<{ id: string; status: string; guest_id: string }>(db, `SELECT id, status, guest_id FROM bookings WHERE property_id = ? AND ${REF_MATCH} AND status NOT IN ('cancelled','no_show','checked_out')`, property.id, ...refArgs(item.external_ref));
+      let open = await all<{ id: string; status: string; guest_id: string }>(db, `SELECT id, status, guest_id FROM bookings WHERE property_id = ? AND ${REF_MATCH} AND status NOT IN ('cancelled','no_show','checked_out')`, property.id, ...refArgs(item.external_ref));
+      // The OTA's own cancellation carries its reference; a booking made from STAAH carries "STAAH id (OTA ref)".
+      if (!open.length && d.ota_ref && d.ota_ref !== item.external_ref) open = await all<{ id: string; status: string; guest_id: string }>(db, `SELECT id, status, guest_id FROM bookings WHERE property_id = ? AND ${REF_MATCH} AND status NOT IN ('cancelled','no_show','checked_out')`, property.id, ...refArgs(String(d.ota_ref)));
       if (!open.length) {
         // Cancelled after the stay was completed: the revenue desk must check with the OTA before the payout is counted on.
         const done = await one<{ name: string; check_in: string; check_out: string }>(db, `SELECT g.name, b.check_in, b.check_out FROM bookings b JOIN guests g ON g.id = b.guest_id WHERE b.property_id = ? AND ${REF_MATCH} AND b.status = 'checked_out' ORDER BY b.created_at DESC LIMIT 1`, property.id, ...refArgs(String(item.external_ref)));
