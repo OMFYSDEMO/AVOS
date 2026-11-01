@@ -166,7 +166,7 @@ describe("Inbox automation", () => {
     expect((await sql("SELECT room_id FROM room_nights WHERE booking_id = ?", ing.booking_id))[0].room_id).toBe("loc_r2");
     // Re-reading a waiting card re-runs the parser and automation; a done card is left alone.
     expect((await api("prachi", "POST", `/api/inbox/${ing.id}/reparse`)).status).toBe(409);
-    const unknown = await ok("prachi", "POST", "/api/inbox/ingest", { from: "someone@example.com", subject: "hello", text: "nothing to see" });
+    const unknown = await ok("prachi", "POST", "/api/inbox/ingest", { from: "someone@example.com", subject: "hello", text: "is a booking for two possible next month?" });
     expect(unknown.status).toBe("pending");
     const re = await ok("prachi", "POST", `/api/inbox/${unknown.id}/reparse`);
     expect(re.status).toBe("pending"); expect(re.parsed.source).toBe("unknown");
@@ -254,9 +254,16 @@ describe("Inbox automation", () => {
     // The same address forwarding something it wants AVOS to see: kept for a person.
     const fwd = await ok("prachi", "POST", "/api/inbox/ingest", { from: "bookings@meadowsvarkala.com", subject: "Fwd: room request from a guest", text: "---------- Forwarded message ---------\nFrom: guest@example.com\nCan we book two rooms in March?" });
     expect(fwd.status).toBe("pending");
-    // An outsider's email AVOS cannot read still waits for a person.
+    // An outsider's email AVOS cannot read but that is about a booking still waits for a person.
     const other = await ok("prachi", "POST", "/api/inbox/ingest", { from: "guest@example.com", subject: "Booking Query", text: quote });
     expect(other.status).toBe("pending");
+    // Everything else bookings@ passes on (offers, newsletters, chatter) is filed with the reason.
+    const promo = await ok("prachi", "POST", "/api/inbox/ingest", { from: "offers@example-supplier.com", subject: "Diwali offer on linen", text: "Flat 20% off bed linen this week only." });
+    expect(promo.status).toBe("dismissed");
+    expect((await sql("SELECT auto_note FROM inbox_items WHERE id = ?", promo.id))[0].auto_note).toMatch(/not a booking, payment or bank notification/);
+    // A payment email AVOS does not know yet is not filed unseen.
+    const unknownPay = await ok("prachi", "POST", "/api/inbox/ingest", { from: "alerts@newgateway.example", subject: "You received money", text: "A payment of INR 4,000 was credited to your merchant account." });
+    expect(unknownPay.status).toBe("pending");
   });
 
   it("does nothing on its own when the owner switches automation off", async () => {

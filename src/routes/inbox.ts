@@ -101,10 +101,9 @@ async function initialStatus(env: Env, propertyId: string, parsed: ParsedEmail, 
 }
 
 /**
- * Mail our own staff wrote (a quote, a reply to a guest) that reaches the inbox because a mailbox copied or forwarded
- * it: sent from an address that is one of this property's AVOS logins, not itself a forward, and not a notification
- * AVOS can read. It is filed as dismissed with the reason, so it never waits for a person. A forwarded email is kept:
- * that is how staff hand AVOS something on purpose.
+ * Mail that is not AVOS's business is filed as dismissed with the reason, so it never waits for a person: mail our
+ * own staff wrote (a quote, a reply to a guest) and anything else that is not a booking, payment or bank notification.
+ * A forwarded email is kept: that is how staff hand AVOS something on purpose.
  */
 /** A payment link sent to a guest is a record, not work: it is filed with what it asked for. */
 function paymentRequestNote(parsed: ParsedEmail): string | null {
@@ -120,7 +119,13 @@ async function ownMailNote(env: Env, propertyId: string, from: string, subject: 
   if (!addr) return null;
   if (/^\s*(?:fwd?|fw)\s*:/i.test(subject) || /Forwarded message|Original Message|Begin forwarded message/i.test(`${text ?? ""}\n${html ?? ""}`)) return null;
   const own = await one(env.DB, "SELECT id FROM users WHERE property_id = ? AND lower(email) = ?", propertyId, addr);
-  return own ? `sent from our own mailbox (${addr}), not a booking or payment notification` : null;
+  if (own) return `sent from our own mailbox (${addr}), not a booking or payment notification`;
+  // bookings@ forwards everything it receives: AVOS keeps only bookings, payments and bank notifications. Mail it
+  // cannot read but that looks like one (a new OTA, an unfamiliar payment email) still waits for a person, so nothing
+  // that may be money or a stay is filed unseen; guest chatter, newsletters and offers are filed with the reason.
+  const words = `${subject}\n${(text ?? html ?? "").slice(0, 4000)}`;
+  if (/\b(reservation|booking|voucher|itinerary|check-?in|cancell?ation|cancell?ed|refund|payment|paid|transaction|credited|debited|settlement|payout|invoice|UTR|NEFT|IMPS|UPI)\b/i.test(words)) return null;
+  return "not a booking, payment or bank notification: filed automatically";
 }
 
 /** Run automation on a stored item and return the outcome plus the row as it now stands. */
