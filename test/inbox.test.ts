@@ -122,6 +122,15 @@ describe("Inbox automation", () => {
     expect((await sql("SELECT COUNT(*) AS n FROM payments WHERE booking_id = ? AND status != 'void'", b2.booking.id))[0].n).toBe(1);
   });
 
+  it("matches a hand-made Airpay link payment (short order id) to the guest's stay by mobile number", async () => {
+    const bk = await ok("prachi", "POST", "/api/bookings", { guest_name: "Link Payer", guest_phone: "919900011122", guest_email: "linkpayer@example.com", channel_code: "direct", check_in: "2027-10-07", check_out: "2027-10-09", rooms: [{ room_id: "loc_r2", nightly_rate_paise: 577500 }, { room_id: "loc_r1", nightly_rate_paise: 577500 }] });
+    const receipt = "INR 23100.00\n\nCollected Successfully\n\nPAYMENT DETAILS\nMerchant Name\tMeadows Varkala\nOrder ID\t1106499\nCustomer Name\tLINK PAYER\nEmail Id\tLINKPAYER@EXAMPLE.COM\nMobile No\t919900011122\nOrder Amount\tINR 23100.00\nSurcharge\tINR 0.00\nBilled Amount\tINR 23100.00\nAirpay Id\t2094560099\nhttps://nps.airpay.co.in/view.php?id=7";
+    const ing = await ok("prachi", "POST", "/api/inbox/ingest", { from: "noreply@airpay.co.in", subject: "Congratulations! Order ID 1106499 Transaction is Successful", text: receipt });
+    expect(ing.parsed.data).toMatchObject({ order_id: "1106499", airpay_id: "2094560099", amount_paise: 2310000, payer_name: "LINK PAYER", payer_mobile: "919900011122", success: true });
+    expect(ing.auto.what).toBe("paid");
+    expect((await sql("SELECT booking_id, amount_paise FROM payments WHERE reference = '1106499'"))[0]).toEqual({ booking_id: bk.booking.id, amount_paise: 2310000 });
+  });
+
   it("never takes a failed or pending Airpay attempt for a payment", async () => {
     const mail = (subject: string, head: string) => parseInboundEmail("noreply@airpay.co.in", subject, undefined, `${head}\nOrder ID\n179000000000999\nCustomer Name\nSOME GUEST\nOrder Amount\nINR 5250.00\nAirpay Id\n2099999003\nhttps://nps.airpay.co.in/view.php?id=3`);
     for (const [subject, head] of [["Order ID 179000000000999 Transaction is Unsuccessful", "INR 5250.00\nTransaction Unsuccessful"], ["Order ID 179000000000999 Transaction Failed", "INR 5250.00\nPayment failed"], ["Order ID 179000000000999 Transaction Pending", "INR 5250.00\nYour transaction is pending"]]) {

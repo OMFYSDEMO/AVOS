@@ -1,7 +1,7 @@
 import { rupeesToPaise } from "../domain/money";
 import { parseLooseDate } from "../domain/dates";
 
-export const PARSER_VERSION = "2026-10-31b";
+export const PARSER_VERSION = "2026-11-01a";
 
 /** "Villa", "Entire villa", "Whole villa", "Full villa": the booking engine's name for all rooms together. */
 export const isWholeVilla = (roomName: unknown) => /^(the\s+)?(entire|whole|full|complete|exclusive)?\s*villa\b/i.test(String(roomName ?? "").trim());
@@ -217,18 +217,22 @@ export function parseBankAlert(subject: string, body: string): ParsedEmail {
 
 /** Airpay payment-gateway "transaction successful" email → routes to the Payments screen, never the booking inbox. */
 export function parseAirpay(subject: string, body: string): ParsedEmail {
-  const order = grab(body, /Order(?: (?:ID|No\.?))?\s*:?\s*#?\s*([0-9]{8,})/i) ?? grab(subject, /([0-9]{10,})/);
+  // A payment link the desk makes by hand carries a short order id (1106441); the website's are long.
+  const order = grab(body, /Order(?: (?:ID|No\.?))?\s*:?\s*#?\s*([0-9]{5,})/i) ?? grab(subject, /Order ID\s*([0-9]{5,})/i) ?? grab(subject, /([0-9]{10,})/);
   // Airpay's receipt lays labels above values: "Order Amount / INR 20000.00", "Billed Amount", "Airpay Id / 2091754834".
   const money = "(?:INR|Rs\\.?|₹)?\\s*₹?\\s*([\\d,]+\\.?\\d*)";
   const amount = grab(body, new RegExp(`Order Amount\\s*:?\\s*${money}`, "i")) ?? grab(body, new RegExp(`Billed Amount\\s*:?\\s*${money}`, "i"))
     ?? grab(body, /(?:INR|Rs\.?|₹)\s*([\d,]+\.?\d*)\s*Collected Successfully/i) ?? grab(body, new RegExp(`(?:Amount|₹)\\s*:?\\s*${money}`, "i"));
   const airpayId = grab(body, /Airpay\s*Id\s*:?\s*([0-9]{6,})/i);
-  const payer = grab(body, /Payer(?: Name)?\s*:?\s*([^\n]+)/i) ?? grab(body, /Customer(?: Name)?\s*:?\s*([^\n]+)/i);
+  // Labels start their line ("Customer Name<tab>KISHORE KS"); a name that contains "payer" must not read as the label.
+  const payer = grab(body, /(?:^|\n)[ \t]*Payer Name[ \t]*:?[ \t]*\n?[ \t]*([^\n]+)/i) ?? grab(body, /(?:^|\n)[ \t]*Customer Name[ \t]*:?[ \t]*\n?[ \t]*([^\n]+)/i) ?? grab(body, /(?:^|\n)[ \t]*(?:Payer|Customer)[ \t]*:[ \t]*([^\n]+)/i);
   // Paid only when Airpay says so in its own words, and never when it reports a failed, declined or pending attempt
   // ("Unsuccessful" contains "success").
   const failed = /unsuccessful|\bfail(?:ed|ure)?\b|declined|\baborted\b|\bpending\b|\bcancell?ed\b|\brejected\b/i.test(`${subject}\n${body.slice(0, 1500)}`);
   const success = !failed && /Transaction is Successful|Transaction Successful|Collected Successfully|Payment (?:is )?Successful|Payment Received Successfully/i.test(`${subject}\n${body}`);
-  const data = { order_id: order, airpay_id: airpayId, amount_paise: amount ? rupeesToPaise(amount) : null, payer_name: payer, success };
+  const payerMobile = grab(body, /Mobile(?: No\.?)?\s*:?\s*\+?([0-9]{10,13})/i);
+  const payerEmail = grab(body, /Email(?: Id)?\s*:?\s*([\w.+-]+@[\w-]+\.[\w.-]+)/i);
+  const data = { order_id: order, airpay_id: airpayId, amount_paise: amount ? rupeesToPaise(amount) : null, payer_name: payer, payer_mobile: payerMobile, payer_email: payerEmail, success };
   return { source: "airpay", kind: "payment", external_ref: order, data, confidence: order && data.amount_paise && success ? "high" : "low" };
 }
 

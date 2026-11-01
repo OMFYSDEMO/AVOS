@@ -208,7 +208,15 @@ export function Reservations({ me, refs }: { me: Me; refs: Ref }) {
   const isOta = !!channel && channel.collection_type !== "direct";
   const missing = totals.nights <= 0 ? "Check-out must be after check-in" : totals.rooms === 0 ? "Pick at least one room" : f.guest_name.trim().length < 2 ? "Add the guest's name" : null;
   const canSave = !missing && Object.values(f.rooms as Record<string, string>).every((v) => v === "" || Number(v) >= 0);
-  const save = () => run(async () => {
+  // The same guest (by phone) already booked for overlapping dates: almost always one stay that needs a second room,
+  // which belongs on the existing booking (one bill, one payment), not a new one.
+  const last10 = (v: unknown) => String(v ?? "").replace(/\D/g, "").slice(-10);
+  const sameGuest = last10(f.guest_phone).length === 10 ? (q.data?.bookings ?? []).filter((b: any) => last10(b.guest_phone) === last10(f.guest_phone) && ["provisional", "approved", "checked_in"].includes(b.status) && b.check_in < f.check_out && b.check_out > f.check_in) : [];
+  const save = async () => {
+    if (sameGuest.length && !(await askConfirm(`${sameGuest[0].guest_name} already has a booking for these dates`, `${String(sameGuest[0].room_names ?? "")}, ${fmtRange(sameGuest[0].check_in, sameGuest[0].check_out)}. If this is the same stay, cancel here, open that booking and use Amend to add the room, so the guest gets one bill and pays once.`, { ok: "Save as a separate booking" }))) return;
+    await saveBooking();
+  };
+  const saveBooking = () => run(async () => {
     const rs = Object.entries(f.rooms as Record<string, string>).filter(([, v]) => v !== "").map(([room_id, v]) => ({ room_id, nightly_rate_paise: Math.round(Number(v) * 100) }));
     const r = await post("/bookings", { ...f, rooms: rs, inbox_item_id: fromInbox?.inbox_item_id ?? undefined });
     if (fromInbox) { try { sessionStorage.removeItem("avos.bookFromInbox"); } catch {} setFromInbox(null); }
@@ -271,6 +279,7 @@ export function Reservations({ me, refs }: { me: Me; refs: Ref }) {
           <Field label="Booking reference (optional)" hint="the reservation number on the OTA or booking-engine email; receipts and cancellations find the booking by it"><input value={f.external_ref ?? ""} onChange={(e: any) => setF({ ...f, external_ref: e.currentTarget.value })} placeholder="e.g. 1060900000106018" /></Field>
         </div>
         <Field label="Notes (optional)"><input value={f.notes} onChange={(e: any) => setF({ ...f, notes: e.currentTarget.value })} placeholder="early check-in, anniversary…" /></Field>
+        {sameGuest.length > 0 && <div className="note bad" role="status"><b>{sameGuest[0].guest_name} already has a booking for these dates</b> ({String(sameGuest[0].room_names ?? "")}, {fmtRange(sameGuest[0].check_in, sameGuest[0].check_out)}). If it is the same stay, add this room to that booking with Amend, so the guest has one bill and pays once. <a href="#resv" onClick={(e) => { e.preventDefault(); setNewOpen(false); setOpen(sameGuest[0].id); }}>Open that booking</a></div>}
       </div>
     </Drawer>}
 
