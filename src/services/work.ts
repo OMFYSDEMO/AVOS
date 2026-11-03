@@ -128,7 +128,7 @@ export async function allWorkItems(db: D1Database, p: PropertyRow, now = nowIso(
        FROM money_accounts a WHERE a.property_id = ? AND a.kind = 'gateway' AND a.active = 1 ORDER BY a.id LIMIT 1`, p.id);
     const quietSince = gw?.last ? new Date(Date.parse(`${gw.last}T00:00:00+05:30`) + 5 * 86_400_000).toISOString().slice(0, 10) : null;
     if (gw && gw.bal !== 0 && quietSince && today >= quietSince)
-      out.push(item("airpay", `airpay:${gw.id}:${gw.bal}`, `Airpay clearing holds ₹${(gw.bal / 100).toLocaleString("en-IN")} with nothing left to settle`, "Airpay's actual charges differ from the 2% estimate: adjust the fee expenses to the settlement (or tell the owner)", "revenue", localIso(quietSince, "09:00"), "#recon", now));
+      out.push(item("airpay", `airpay:${gw.id}:${gw.bal}`, `Airpay clearing holds ₹${(gw.bal / 100).toLocaleString("en-IN")} with nothing left to settle`, "Airpay's actual charges differ from the 2.75% + GST estimate: adjust the fee expenses to the settlement (or tell the owner)", "revenue", localIso(quietSince, "09:00"), "#recon", now));
   }
   // Owner: refunds approved by the revenue desk and not yet paid.
   for (const r of await all<any>(db, `SELECT a.id, a.summary, a.amount_paise, a.decided_at, a.created_at FROM approvals a WHERE a.property_id = ? AND a.kind = 'refund' AND a.status = 'approved'

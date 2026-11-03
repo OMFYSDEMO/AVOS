@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll } from "vitest";
+import { env } from "cloudflare:test";
 import { seed, api, ok, sql } from "./helpers";
 import { todayIn, addDays } from "../src/domain/dates";
+import { gatewayFee } from "../src/services/payments";
 
 /** Fixes from the 25 Oct audit: nothing owed, owed back, mis-taxed or cancelled after the stay may fall between desks. */
 describe("Audit fixes", () => {
@@ -75,8 +77,19 @@ describe("Audit fixes", () => {
 
   it("money left in Airpay clearing after settlement is flagged for the revenue desk", async () => {
     await ok("sindhu", "POST", "/api/payments", { method: "airpay", amount_paise: 1000000, received_on: addDays(today, -10), reference: "AP-RESIDUE" });
-    await ok("shaji", "POST", "/api/payments/transfers", { from_account_id: "acc_gw", to_account_id: "acc_bank", amount_paise: 970000, reference: "AIRPAY SETTLE" });
+    // Estimated fee 2.75% + GST = 324.50, so 9,675.50 is the expected settlement; Airpay paid ₹100 less.
+    await ok("shaji", "POST", "/api/payments/transfers", { from_account_id: "acc_gw", to_account_id: "acc_bank", amount_paise: 957550, reference: "AIRPAY SETTLE" });
     expect(await work("trupti")).toMatch(/Airpay clearing holds ₹100/);
+  });
+
+  it("the Airpay fee estimate is 2.75% plus GST on the charge, as Airpay settles it", async () => {
+    // ₹23,100 paid, ₹22,350.40 settled: Airpay kept 635.25 + 114.35 GST = 749.60.
+    expect(gatewayFee("airpay", 2310000)).toMatchObject({ charge: 63525, gst: 11435, total: 74960, gstBp: 1800 });
+    const pay = await ok("sindhu", "POST", "/api/payments", { method: "airpay", amount_paise: 2310000, reference: "AP-RATE" });
+    const fee: any = await env.DB.prepare("SELECT amount_paise, gst_rate_bp, gst_paise FROM expenses WHERE id = ?").bind(pay.fee_expense_id).first();
+    expect(fee).toEqual({ amount_paise: 74960, gst_rate_bp: 1800, gst_paise: 11435 });
+    // Card's rate already includes GST: nothing added on top.
+    expect(gatewayFee("card", 1000000)).toMatchObject({ total: 17700, gst: 0 });
   });
 });
 

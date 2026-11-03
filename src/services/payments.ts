@@ -6,9 +6,21 @@ import { loadBooking, paidOnBooking } from "./bookings";
 
 export const METHODS = ["upi", "cash", "card", "airpay", "bank", "ota"] as const;
 export type PaymentMethod = (typeof METHODS)[number];
-/** Contracted gateway fee per method, in basis points of the amount received. */
-// Card: the bank's POS charge as it has actually been deducted here, 1.5% + 18% GST = 1.77%. Reconciliation adjusts it to the exact figure.
-export const GATEWAY_FEE_BP: Record<string, number> = { airpay: 200, card: 177, upi: 0, cash: 0, bank: 0, ota: 0 };
+/** Estimated gateway charge per method, in basis points of the amount received, before any GST the gateway adds. */
+// Card: the bank's POS charge as it has actually been deducted here, 1.5% + 18% GST = 1.77% (GST included in the rate).
+// Airpay: 2.75% + 18% GST on the charge, as on its settlements (₹23,100 paid, ₹749.60 kept). Reconciliation adjusts either to the exact figure.
+export const GATEWAY_FEE_BP: Record<string, number> = { airpay: 275, card: 177, upi: 0, cash: 0, bank: 0, ota: 0 };
+/** GST the gateway charges on top of its fee: booked as input GST on the fee expense, as Airpay's invoices show it. */
+export const GATEWAY_FEE_GST_BP: Record<string, number> = { airpay: 1800 };
+
+/** The fee expense for a payment: charge at the rate, plus the gateway's GST on the charge (each rounded, as the gateway does). */
+export function gatewayFee(method: string, amountPaise: number, overrideBp?: number): { bp: number; charge: number; gstBp: number; gst: number; total: number } {
+  const bp = overrideBp ?? GATEWAY_FEE_BP[method] ?? 0;
+  const gstBp = overrideBp === undefined ? GATEWAY_FEE_GST_BP[method] ?? 0 : 0; // an explicit rate is all-in
+  const charge = applyBp(amountPaise, bp);
+  const gst = applyBp(charge, gstBp);
+  return { bp, charge, gstBp, gst, total: charge + gst };
+}
 
 export interface RecordPaymentInput {
   idempotency_key?: string | null;
@@ -63,12 +75,13 @@ export async function recordPayment(db: D1Database, actor: Actor, p: PropertyRow
   }
   const pid = id("pay");
   const b = new Batch(db, actor);
-  const feeBp = x.fee_bp ?? GATEWAY_FEE_BP[x.method] ?? 0;
+  const fee = gatewayFee(x.method, x.amount_paise, x.fee_bp);
   let feeId: string | null = null;
-  if (feeBp > 0) {
+  if (fee.total > 0) {
     feeId = id("exp");
+    const rate = `${fee.bp / 100}%${fee.gstBp ? " + GST" : ""}`;
     b.add(`INSERT INTO expenses (id, property_id, kind, category, description, amount_paise, gst_rate_bp, gst_paise, paid_from_account_id, on_date, payment_id, recorded_by)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, feeId, p.id, "gateway_fee", "bank_charges", `${x.method} fee ${feeBp / 100}% on payment ${pid}`, applyBp(x.amount_paise, feeBp), 0, 0, accountId, receivedOn, pid, actor.id);
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, feeId, p.id, "gateway_fee", "bank_charges", `${x.method} fee ${rate} on payment ${pid}${x.method === "airpay" ? " (estimate; adjusted to the settlement)" : ""}`, fee.total, fee.gstBp, fee.gst, accountId, receivedOn, pid, actor.id);
   }
   // An Airpay receipt that came through the inbox is confirmed by the gateway's own email; a hand-typed one waits for the statement.
   const status = x.method === "airpay" && !x.inbox_item_id ? "recorded" : "confirmed";
