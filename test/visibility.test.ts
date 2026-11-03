@@ -67,6 +67,32 @@ describe("Who sees the money", () => {
     expect("commission_bp" in det.channel).toBe(false);
   });
 
+  it("sales record a guest's advance against the booking, but not cash, other desks' payments or gateway receipts", async () => {
+    const bk = await ok("prachi", "POST", "/api/bookings", { guest_name: "Sales Advance", guest_phone: "9500000222", channel_code: "direct", check_in: "2027-08-01", check_out: "2027-08-03", rooms: [{ room_id: "loc_r2", nightly_rate_paise: 1000000 }] });
+    const pay = await api("prachi", "POST", "/api/payments", { booking_id: bk.booking.id, method: "upi", amount_paise: 1000000, account_id: "acc_bank", reference: "UPI-SALES-1" });
+    expect(pay.status).toBe(201);
+    const det = await ok("prachi", "GET", `/api/bookings/${bk.booking.id}`);
+    expect(pay.json.balance_paise).toBe(det.booking.gross_paise - 1000000);
+    expect(det.balance_paise).toBe(det.booking.gross_paise - 1000000);
+    expect((await api("prachi", "POST", "/api/payments", { booking_id: bk.booking.id, method: "cash", amount_paise: 1000 })).status).toBe(403);
+    expect((await api("prachi", "POST", "/api/payments", { booking_id: bk.booking.id, method: "ota", amount_paise: 1000 })).status).toBe(403);
+    // Each desk lists what its own desk recorded.
+    await ok("sindhu", "POST", "/api/payments", { booking_id: bk.booking.id, method: "cash", amount_paise: 5000, reference: "DESK-CASH" });
+    const mine = await ok("prachi", "GET", `/api/payments?booking_id=${bk.booking.id}`);
+    expect(mine.payments.map((p: any) => p.reference)).toEqual(["UPI-SALES-1"]);
+    expect((await ok("sindhu", "GET", `/api/payments?booking_id=${bk.booking.id}`)).payments.map((p: any) => p.reference)).toEqual(["DESK-CASH"]);
+    // The revenue desk sees both and can void either; a desk voids only its own desk's.
+    expect((await ok("trupti", "GET", `/api/payments?booking_id=${bk.booking.id}`)).payments).toHaveLength(2);
+    const cash = (await ok("sindhu", "GET", `/api/payments?booking_id=${bk.booking.id}`)).payments[0];
+    expect((await api("prachi", "POST", `/api/payments/${cash.id}/void`, { reason: "not mine" })).status).toBe(403);
+    expect((await api("sindhu", "POST", `/api/payments/${pay.json.id}/void`, { reason: "not mine" })).status).toBe(403);
+    await ok("prachi", "POST", `/api/payments/${pay.json.id}/void`, { reason: "typed twice" });
+    // Gateway receipts waiting in the inbox and other income stay with the front desk and the revenue desk.
+    expect((await ok("prachi", "GET", "/api/payments/gateway-inbox")).items).toEqual([]);
+    expect((await api("prachi", "POST", "/api/income", { on_date: "2027-08-01", category: "dining", description: "x", amount_paise: 1000, gst_rate_bp: 0, method: "upi" })).status).toBe(403);
+    expect((await ok("sindhu", "GET", "/api/payments/gateway-inbox")).items).toBeDefined();
+  });
+
   it("sales never see bank alerts or gateway receipts in the inbox, and cannot act on them", async () => {
     const alert = await ok("trupti", "POST", "/api/inbox/ingest", { from: "transaction.alerts@idfcfirstbank.com", subject: "Transaction alert from IDFC FIRST Bank", text: "Your A/C XXXXXXX3390 has been credited with INR 1,234.00 on 25/10/2026 10:00. New balance is INR 9,99,999.00CR.", message_id: "<vis-alert@idfc>" });
     const all = async (u: "prachi" | "trupti") => [...(await ok(u, "GET", "/api/inbox?status=pending")).items, ...(await ok(u, "GET", "/api/inbox?status=approved")).items, ...(await ok(u, "GET", "/api/inbox?status=routed")).items];

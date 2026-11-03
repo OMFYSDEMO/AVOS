@@ -6,7 +6,7 @@ import { allowed } from "../auth";
 
 const r = newRouter();
 // The CA and revenue desk read the register; recording stays with whoever collects the money.
-r.use("*", async (c, next) => (c.req.method === "GET" ? requireAny("payments", "finance") : requireCap("payments"))(c, next));
+r.use("*", async (c, next) => (c.req.method === "GET" ? requireAny("other_income", "finance") : requireCap("other_income"))(c, next));
 
 export const INCOME_CATEGORIES = ["dining", "photo", "events", "transport", "other"] as const;
 const METHODS = ["upi", "cash", "card", "airpay", "bank"] as const;

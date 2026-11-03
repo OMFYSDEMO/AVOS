@@ -7,6 +7,7 @@ import { loadBooking, paidOnBooking } from "../services/bookings";
 import { recordPayment, METHODS } from "../services/payments";
 
 const r = newRouter();
+const SALES_METHODS = ["upi", "bank", "card", "airpay"];
 
 /** Contracted gateway fees (bp of amount) by method; the fee expense is booked once, here (F4). */
 
@@ -37,8 +38,8 @@ r.get("/", requireAny("payments", "finance"), async (c) => {
   const fin = allowed(c.get("actor"), "finance");
   const from = c.req.query("from"), to = c.req.query("to"), bookingId = c.req.query("booking_id");
   const where = ["p.property_id = ?"]; const params: unknown[] = [p.id];
-  // The front desk sees the collections it recorded itself: no OTA payouts, no advances the revenue desk or owner posted.
-  if (!fin) where.push("p.method != 'ota' AND p.recorded_by IN (SELECT id FROM users WHERE role = 'property')");
+  // The front desk and sales each see the collections their own desk recorded: no OTA payouts, nothing the revenue desk or owner posted.
+  if (!fin) { where.push("p.method != 'ota' AND p.recorded_by IN (SELECT id FROM users WHERE role = ?)"); params.push(c.get("actor").role); }
   if (from) { where.push("p.received_on >= ?"); params.push(date(from, "from")); }
   if (to) { where.push("p.received_on <= ?"); params.push(date(to, "to")); }
   if (bookingId) { where.push("p.booking_id = ?"); params.push(bookingId); }
@@ -50,6 +51,7 @@ r.get("/", requireAny("payments", "finance"), async (c) => {
 /** Airpay emails routed from the inbox, waiting for Sindhu to confirm against a stay. */
 r.get("/gateway-inbox", requireCap("payments"), async (c) => {
   const p = c.get("property");
+  if (c.get("actor").role === "sales") return c.json({ items: [] }); // gateway receipts are the front desk's and the revenue desk's
   const items = await all(c.env.DB, "SELECT * FROM inbox_items WHERE property_id = ? AND kind = 'payment' AND status = 'routed' ORDER BY received_at DESC", p.id);
   const out = [];
   for (const it of items as any[]) {
@@ -69,6 +71,7 @@ r.get("/gateway-inbox", requireCap("payments"), async (c) => {
 r.post("/", requireCap("payments"), async (c) => {
   const p = c.get("property"); const actor = c.get("actor");
   const x = await body(c);
+  if (actor.role === "sales" && !SALES_METHODS.includes(x.method as string)) throw new HttpError(403, "sales record UPI, bank transfer, card or Airpay payments; cash is collected at the property");
   const res = await recordPayment(c.env.DB, actor, p, {
     idempotency_key: optStr(x.idempotency_key, "idempotency_key"), booking_id: optStr(x.booking_id, "booking_id"), guest_id: optStr(x.guest_id, "guest_id"),
     method: oneOf(x.method, "method", METHODS), amount_paise: paise(x.amount_paise, "amount_paise"), received_on: optStr(x.received_on, "received_on"),
@@ -86,6 +89,11 @@ r.post("/:id/void", requireCap("payments"), async (c) => {
   if (!pay) throw new HttpError(404, "payment not found");
   if (pay.status === "void") throw new HttpError(409, "already void");
   if (pay.status === "matched") throw new HttpError(409, "payment is reconciled to the bank; unmatch it first");
+  // A desk voids only what its own desk recorded; the revenue desk and the owner can void any.
+  if (!allowed(actor, "finance")) {
+    const by = await one<{ role: string }>(c.env.DB, "SELECT role FROM users WHERE id = ?", pay.recorded_by);
+    if (by?.role !== actor.role) throw new HttpError(403, "only the revenue desk or the owner can void a payment another desk recorded");
+  }
   await assertPeriodOpen(c.env.DB, p.id, pay.received_on);
   const x = await body(c);
   const reason = str(x.reason, "reason");
@@ -141,7 +149,7 @@ r.post("/transfers", requireCap("transfers"), async (c) => {
   return c.json({ id: tid }, 201);
 });
 
-r.get("/transfers", requireAny("payments", "finance"), async (c) => {
+r.get("/transfers", requireAny("transfers", "finance"), async (c) => {
   const p = c.get("property");
   // The front desk sees only movements of the cash it holds (deposits, petty top-ups), never bank-to-bank or gateway settlements.
   const own = allowed(c.get("actor"), "finance") ? "" : "AND (fa.holder_role = 'property' OR ta.holder_role = 'property')";

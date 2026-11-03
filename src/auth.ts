@@ -125,7 +125,9 @@ export const CAN: Record<string, Role[]> = {
   bookings_write: ["sales", "revenue", "owner"],
   bookings_read: ["sales", "property", "revenue", "owner", "accountant"],
   frontdesk: ["property", "owner"],
-  payments: ["property", "revenue", "owner"],
+  // Sales take advances by UPI, bank transfer, card or Airpay link; cash is collected at the property.
+  payments: ["sales", "property", "revenue", "owner"],
+  other_income: ["property", "revenue", "owner"],
   invoices: ["property", "revenue", "owner", "accountant"],
   tasks: ["property", "owner"],
   petty_expenses: ["property", "owner"],

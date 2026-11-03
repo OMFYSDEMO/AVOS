@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { get, post, patch, del } from "../api";
-import { Card, Row, Btn, Chips, Field, Status, Empty, Loading, inr, fmtDate, ago, useLoad, run, toast, todayIso, askText, askConfirm, ScrollX, Drawer, fmtRange, fmtDateTime, actionLabel } from "../ui";
+import { Card, Row, Btn, Chips, Field, Status, Empty, Loading, inr, fmtDate, ago, useLoad, run, toast, todayIso, askText, askConfirm, ScrollX, Drawer, fmtRange, fmtDateTime, actionLabel, BankPick, defaultBankId } from "../ui";
 import type { Me, Ref } from "../app";
 
 const SOURCES = [["instagram", "Instagram"], ["facebook", "Facebook"], ["website", "Website"], ["whatsapp", "WhatsApp"], ["phone", "Phone"], ["walkin", "Walk-in"], ["other", "Other"]] as const;
@@ -331,10 +331,35 @@ function BookingDetail({ me, refs, d, rooms, tariffFor, onChange, onClose }: { m
         <Row strong label="Gross" value={inr(b.gross_paise)} />
         <Row label="Paid" value={inr(d.paid_paise)} />
         <Row strong label="Balance" value={<span style={d.balance_paise > 0 ? { color: "var(--amb)" } : undefined}>{inr(d.balance_paise)}</span>} />
+        {d.payments.filter((p: any) => p.status !== "void").map((p: any) => <div className="sub" key={p.id}>{fmtDate(p.received_on)} · {PAY_LABEL[p.method] ?? p.method} · {inr(p.amount_paise)}{p.kind === "refund" ? " refund" : ""}</div>)}
+        {me.capabilities.includes("payments") && d.channel.collection_type !== "channel_collect" && !["cancelled", "no_show"].includes(b.status) && d.balance_paise > 0 && <RecordPayment key={`${b.id}:${d.paid_paise}`} me={me} refs={refs} d={d} onDone={onChange} />}
       </aside>
     </div>
     <details><summary>Change history ({d.audit.length})</summary>{d.audit.map((a: any) => <div className="muted" key={a.id}>{fmtDateTime(a.at)} · {a.actor_email} · {actionLabel(a.action)}{a.action === "booking.amend" && a.after_json ? ` · ${JSON.parse(a.after_json).remark ?? ""}` : ""}</div>)}</details>
     {live && <Amend key={b.id} me={me} d={d} rooms={rooms} refs={refs} tariffFor={tariffFor} onDone={onChange} />}
+  </div>;
+}
+
+const PAY_LABEL: Record<string, string> = { upi: "UPI", bank: "Bank transfer", card: "Card", airpay: "Airpay", cash: "Cash", ota: "OTA" };
+
+/** Record what the guest has paid towards this booking: an advance or the balance, by UPI, bank transfer, card or Airpay link. */
+function RecordPayment({ me, refs, d, onDone }: { me: Me; refs: Ref; d: any; onDone: () => Promise<void> }) {
+  const [openP, setOpenP] = useState(false);
+  const methods = Object.entries(PAY_LABEL).filter(([v]) => v !== "ota" && (v !== "cash" || me.actor.role !== "sales"));
+  const [f, setF] = useState({ amount: String(d.balance_paise / 100), method: "upi", account_id: defaultBankId(refs.accounts), received_on: todayIso(), reference: "" });
+  const amount = Math.round(Number(f.amount) * 100);
+  const save = () => run(async () => {
+    const r = await post("/payments", { booking_id: d.booking.id, method: f.method, amount_paise: amount, received_on: f.received_on, reference: f.reference.trim() || null, account_id: ["upi", "bank"].includes(f.method) ? f.account_id || undefined : undefined });
+    toast(`Recorded ${inr(amount)} · balance ${inr(r.balance_paise ?? 0)}`); setOpenP(false); await onDone();
+  });
+  if (!openP) return <div className="actions end" style={{ marginTop: "10px" }}><Btn kind="gold" onClick={() => setOpenP(true)}>Record payment</Btn></div>;
+  return <div className="payform" style={{ marginTop: "10px" }}>
+    <Field label="Amount received (₹)" hint={`balance ${inr(d.balance_paise)}: an advance or part-payment is fine`}><input inputMode="decimal" value={f.amount} onChange={(e: any) => setF({ ...f, amount: e.currentTarget.value })} /></Field>
+    <Chips label="Paid by" value={f.method} options={methods.map(([value, label]) => ({ value, label }))} onChange={(v) => setF({ ...f, method: v })} />
+    {["upi", "bank"].includes(f.method) && <BankPick accounts={refs.accounts} value={f.account_id} onChange={(v) => setF({ ...f, account_id: v })} label="Received into" />}
+    <Field label="Date received"><input type="date" value={f.received_on} max={todayIso()} onChange={(e: any) => setF({ ...f, received_on: e.currentTarget.value })} /></Field>
+    <Field label="Reference (optional)" hint="UPI / UTR number or Airpay ID helps the bank match"><input value={f.reference} onChange={(e: any) => setF({ ...f, reference: e.currentTarget.value })} /></Field>
+    <div className="actions end"><Btn onClick={() => setOpenP(false)}>Cancel</Btn><Btn kind="gold" disabled={!(amount > 0)} onClick={save}>Record {inr(amount > 0 ? amount : 0)}</Btn></div>
   </div>;
 }
 

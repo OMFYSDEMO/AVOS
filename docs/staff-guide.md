@@ -42,13 +42,14 @@ Three habits that make everything else work:
 - On-tariff bookings approve themselves. Below tariff goes to Trupti; you will see "awaiting approval" and the booking is provisional until she decides.
 - **Amend**: open the booking, press Amend, change rooms, dates, rate, guest or channel, and write a remark saying why. It is audited and the front desk is told. Use this for a room exchange or a wrong OTA mapping.
 - Cancel needs a reason. Delete is only for your own unapproved bookings with no payment.
+- **Record payment**: when a guest pays you an advance or the balance by UPI, bank transfer, card or Airpay link, open the booking and press **Record payment** under the balance. Type the amount (a part-payment is fine), pick how they paid and which bank it went into, the date it arrived, and the UPI/UTR reference if you have it. The balance updates at once and the revenue desk matches it to the bank alert. Cash is taken at the property only. You can void a payment you recorded by mistake from **Payments**; one recorded by another desk is voided by Trupti.
 
 ### Form C (foreign guests)
 - When the front desk marks a stay as foreign, "Form C to file" lands on your My work with 24 hours from arrival.
 - Open it: the passport page, visa and arrival stamp are there. File on the FRRO portal, type the acknowledgement number into the box and press **Mark Form C filed**.
 
 ### You cannot
-See money beyond a booking's balance, edit an approved booking's amount, see expenses or P&L. Bank alerts and Airpay receipts go to the revenue desk, not your Inbox, and OTA commission terms are not shown to sales.
+Take cash, see money beyond a booking's balance and what you recorded, edit an approved booking's amount, see expenses or P&L. Bank alerts and Airpay receipts go to the revenue desk, not your Inbox, and OTA commission terms are not shown to sales.
 
 ---
 
@@ -108,6 +109,9 @@ Change a booking's rooms or rate (ask sales), record bank expenses, see P&L or s
 | Bank statement line unmatched | 7 days | Smart Reconcile → accept or match |
 | Bank alert AVOS could not post | 2 h | Inbox → check which bank it is for (account digits under Settings) |
 | Anything sales let slip past its time | raised to you | Deal with it or send it back |
+
+### Payments
+- A guest's advance or balance can be recorded from the booking itself: **Reservations** → open the booking → **Record payment** (amount, how paid, which bank, date, reference). **Payments** in the menu does the same from the list of who owes money, and is where any payment can be voided.
 
 ### Approvals
 - Only exceptions reach you: a rate below tariff, a refund, an amendment that changes money. The card shows the reason and the amount. **Approve** or **Return** with a note. The booking stays provisional until you decide.
