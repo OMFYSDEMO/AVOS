@@ -107,6 +107,10 @@ async function initialStatus(env: Env, propertyId: string, parsed: ParsedEmail, 
  */
 /** A payment link sent to a guest is a record, not work: it is filed with what it asked for. */
 function paymentRequestNote(parsed: ParsedEmail): string | null {
+  if (parsed.kind === "bank_alert" && (parsed.data as any).beneficiary_confirmation) {
+    const d = parsed.data as Record<string, any>;
+    return `bank confirms ${d.counterparty ?? "the beneficiary"} received ₹${(Number(d.amount_paise) / 100).toLocaleString("en-IN", { minimumFractionDigits: 2 })} (${d.method ?? "transfer"} ${d.reference ?? ""}); the payment out is on its own debit alert: filed automatically`;
+  }
   if (parsed.kind !== "payment_request") return null;
   const d = parsed.data as Record<string, any>;
   const amt = d.amount_due_paise != null ? `₹${(Number(d.amount_due_paise) / 100).toLocaleString("en-IN", { minimumFractionDigits: 2 })}` : "an amount";

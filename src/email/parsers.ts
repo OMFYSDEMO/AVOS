@@ -1,7 +1,7 @@
 import { rupeesToPaise } from "../domain/money";
 import { parseLooseDate } from "../domain/dates";
 
-export const PARSER_VERSION = "2026-11-05a";
+export const PARSER_VERSION = "2026-11-05b";
 
 /** "Villa", "Entire villa", "Whole villa", "Full villa": the booking engine's name for all rooms together. */
 export const isWholeVilla = (roomName: unknown) => /^(the\s+)?(entire|whole|full|complete|exclusive)?\s*villa\b/i.test(String(roomName ?? "").trim());
@@ -198,6 +198,10 @@ export function parseBookingEngine(subject: string, body: string, year: number):
  */
 export function parseBankAlert(subject: string, body: string): ParsedEmail {
   const flat = body.replace(/\s+/g, " ");
+  // IDFC's follow-up to a transfer out: "Your beneficiary TEST PAYEE has received ₹1,234.00 on 03-11-2027
+  // transferred via NEFT UTR IDFB0000T0000001." The money left on its own debit alert; this only confirms it arrived.
+  const ben = flat.match(/Your beneficiary\s+(.+?)\s+has received\s+(?:INR|Rs\.?|₹)\s*([\d,]+\.?\d*)\s+on\s+(\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4})(?:\s+transferred)?(?:\s+via\s+([A-Za-z]+))?(?:\s+UTR\s+([A-Za-z0-9]+))?/i);
+  if (ben) return { source: "bank", kind: "bank_alert", external_ref: ben[5] ?? null, data: { bank: "IDFC FIRST", beneficiary_confirmation: true, counterparty: clean(ben[1]), amount_paise: rupeesToPaise(ben[2]), on_date: parseLooseDate(ben[3], new Date().getUTCFullYear()), method: ben[4] ?? null, reference: ben[5] ?? null }, confidence: "high" };
   // Read only the alert itself, from "Your A/C …" to the sign-off. The bank's disclaimer underneath
   // ("…links of look-alike websites to mislead into entering sensitive information") must never be read
   // as a payee, and a plain credit alert carries no payer, method or reference at all.

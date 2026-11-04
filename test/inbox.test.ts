@@ -164,6 +164,15 @@ describe("Inbox automation", () => {
     expect((await sql("SELECT booking_id FROM payments WHERE reference = '1108902'"))[0].booking_id).toBe(s2.booking.id);
   });
 
+  it("files IDFC's 'your beneficiary has received' follow-up: the money left on its own debit alert", async () => {
+    const text = "Dear ,\n\nGreetings from IDFC FIRST Bank.\n\nYour beneficiary TEST  PAYEE  has received ₹1,234.00 on 03-11-2027 transferred via NEFT UTR IDFB0000T0000001.\n\nThis is an auto generated e-mail. Please do not reply.\n Always You First, Team IDFC FIRST Bank";
+    const p = parseInboundEmail("transaction.alerts@idfcfirstbank.com", "Transaction alert from IDFC FIRST Bank", undefined, text);
+    expect(p.data).toMatchObject({ beneficiary_confirmation: true, counterparty: "TEST PAYEE", amount_paise: 123400, on_date: "2027-11-03", method: "NEFT", reference: "IDFB0000T0000001" });
+    const ing = await ok("trupti", "POST", "/api/inbox/ingest", { from: "transaction.alerts@idfcfirstbank.com", subject: "Transaction alert from IDFC FIRST Bank", text, message_id: "<ben-confirm@idfc>" });
+    expect(ing.status).toBe("dismissed");
+    expect((await sql("SELECT COUNT(*) AS n FROM bank_statement_lines WHERE reference = 'IDFB0000T0000001'"))[0].n).toBe(0);
+  });
+
   it("never takes a failed or pending Airpay attempt for a payment", async () => {
     const mail = (subject: string, head: string) => parseInboundEmail("noreply@airpay.co.in", subject, undefined, `${head}\nOrder ID\n179000000000999\nCustomer Name\nSOME GUEST\nOrder Amount\nINR 5250.00\nAirpay Id\n2099999003\nhttps://nps.airpay.co.in/view.php?id=3`);
     for (const [subject, head] of [["Order ID 179000000000999 Transaction is Unsuccessful", "INR 5250.00\nTransaction Unsuccessful"], ["Order ID 179000000000999 Transaction Failed", "INR 5250.00\nPayment failed"], ["Order ID 179000000000999 Transaction Pending", "INR 5250.00\nYour transaction is pending"]]) {
