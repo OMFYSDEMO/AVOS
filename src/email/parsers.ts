@@ -1,7 +1,7 @@
 import { rupeesToPaise } from "../domain/money";
 import { parseLooseDate } from "../domain/dates";
 
-export const PARSER_VERSION = "2026-11-05b";
+export const PARSER_VERSION = "2026-11-05c";
 
 /** "Villa", "Entire villa", "Whole villa", "Full villa": the booking engine's name for all rooms together. */
 export const isWholeVilla = (roomName: unknown) => /^(the\s+)?(entire|whole|full|complete|exclusive)?\s*villa\b/i.test(String(roomName ?? "").trim());
@@ -209,7 +209,7 @@ export function parseBankAlert(subject: string, body: string): ParsedEmail {
   const tail = start >= 0 ? flat.slice(start) : flat;
   const stop = tail.search(/Always You First|This is an auto[- ]?generated|\bDisclaimer\b|Team IDFC/i);
   const alertText = stop >= 0 ? tail.slice(0, stop) : tail;
-  const m = alertText.match(/A\/C\s*(?:No\.?\s*)?[Xx*]*(\d{3,6})\s+has been\s+(credited|debited)\s+with\s+(?:INR|Rs\.?|₹)\s*([\d,]+\.?\d*)\s+on\s+(\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4})(?:\s+(\d{1,2}:\d{2}(?::\d{2})?))?/i);
+  const m = alertText.match(/A\/C\s*(?:No\.?\s*)?[Xx*]*(\d{3,6})\s+has been\s+(credited|debited)\s+(?:with|by)\s+(?:INR|Rs\.?|₹)\s*([\d,]+\.?\d*)\s+on\s+(\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4})(?:\s+(\d{1,2}:\d{2}(?::\d{2})?))?/i);
   const method = alertText.match(/vide\s+([A-Za-z\/]+)\s+(?:payment\s+)?reference/i)?.[1] ?? alertText.match(/\b(NEFT|IMPS|RTGS|UPI|ACH|NACH|ECS|CMS)\b/i)?.[1] ?? null;
   const reference = alertText.match(/reference\s*(?:no\.?|number|#)?\s*:?\s*([A-Za-z0-9\-\/]{6,})/i)?.[1] ?? null;
   const counterparty = alertText.match(/received from\s+(.+?)\s*\.(?:\s|$)/i)?.[1]?.trim() ?? alertText.match(/\b(?:towards|paid to|to|at)\s+(.+?)\s*\.(?:\s|$)/i)?.[1]?.trim() ?? null;
@@ -340,7 +340,7 @@ export function parseInboundEmail(from: string, rawSubject: string, html?: strin
   const looksSwiftbook = f.includes("swiftbook") || fwdFrom.includes("swiftbook") || /swiftbook/i.test(subject) || /Itinerary(?: (?:No|Number|ID))?\.?\s*:?\s*#?\s*\d{6,}/i.test(body);
   // A Zoho forward hides the Airpay sender; the receipt's own "Airpay Id" line and airpay.co.in links still give it away.
   const looksAirpay = f.includes("airpay") || fwdFrom.includes("airpay") || /airpay/i.test(subject) || (/Airpay\s*Id/i.test(body) && /airpay\.co\.in/i.test(body));
-  const looksBank = f.includes("idfcfirstbank") || fwdFrom.includes("idfcfirstbank") || /transaction alert from .*bank/i.test(subject) || (/has been (credited|debited) with (INR|Rs)/i.test(body) && /A\/C/i.test(body));
+  const looksBank = f.includes("idfcfirstbank") || fwdFrom.includes("idfcfirstbank") || /transaction alert from .*bank/i.test(subject) || (/has been (credited|debited) (with|by) (INR|Rs)/i.test(body) && /A\/C/i.test(body));
   // When a bank alert or a gateway receipt cannot be read, keep what the reader saw, so the layout can be taught.
   const seen = (r: ParsedEmail) => { if (r.confidence === "low") r.data.seen = { text_chars: (text ?? "").trim().length, html_chars: (html ?? "").length, preview: body.slice(0, 1500) }; return r; };
   if (looksBank) return seen(parseBankAlert(subject, body));
