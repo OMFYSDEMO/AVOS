@@ -1,7 +1,7 @@
 import { rupeesToPaise } from "../domain/money";
 import { parseLooseDate } from "../domain/dates";
 
-export const PARSER_VERSION = "2026-11-01a";
+export const PARSER_VERSION = "2026-11-05a";
 
 /** "Villa", "Entire villa", "Whole villa", "Full villa": the booking engine's name for all rooms together. */
 export const isWholeVilla = (roomName: unknown) => /^(the\s+)?(entire|whole|full|complete|exclusive)?\s*villa\b/i.test(String(roomName ?? "").trim());
@@ -17,8 +17,14 @@ export interface ParsedEmail {
 const clean = (s: string) => s.replace(/\s+/g, " ").trim();
 
 function textOf(html: string | undefined, text: string | undefined): string {
-  if (text && text.trim()) return text;
-  if (!html) return "";
+  const fromHtml = html ? htmlText(html) : "";
+  // Some senders (Airpay's own receipts) carry a stub plain-text part ("view this email in a browser") beside the
+  // real HTML: when the text part is short and the HTML says much more, read the HTML first.
+  if (text && text.trim()) return fromHtml && text.trim().length < 600 && fromHtml.trim().length > text.trim().length * 2 ? `${fromHtml}\n\n${text}` : text;
+  return fromHtml;
+}
+
+function htmlText(html: string): string {
   return html.replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|tr|li|h\d)>/gi, "\n").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&zwnj;|&zwj;|&#8204;|&#8205;|\u200c|\u200d/g, "").replace(/&middot;|&#183;/g, "·").replace(/&rarr;|&#8594;/g, "→").replace(/&mdash;|&#8212;/g, "—").replace(/&bull;|&#8226;/g, "•").replace(/&amp;/g, "&").replace(/&rsquo;|&#8217;/g, "'").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/[ \t]+/g, " ");
 }
 
@@ -331,7 +337,9 @@ export function parseInboundEmail(from: string, rawSubject: string, html?: strin
   // A Zoho forward hides the Airpay sender; the receipt's own "Airpay Id" line and airpay.co.in links still give it away.
   const looksAirpay = f.includes("airpay") || fwdFrom.includes("airpay") || /airpay/i.test(subject) || (/Airpay\s*Id/i.test(body) && /airpay\.co\.in/i.test(body));
   const looksBank = f.includes("idfcfirstbank") || fwdFrom.includes("idfcfirstbank") || /transaction alert from .*bank/i.test(subject) || (/has been (credited|debited) with (INR|Rs)/i.test(body) && /A\/C/i.test(body));
-  if (looksBank) return parseBankAlert(subject, body);
+  // When a bank alert or a gateway receipt cannot be read, keep what the reader saw, so the layout can be taught.
+  const seen = (r: ParsedEmail) => { if (r.confidence === "low") r.data.seen = { text_chars: (text ?? "").trim().length, html_chars: (html ?? "").length, preview: body.slice(0, 1500) }; return r; };
+  if (looksBank) return seen(parseBankAlert(subject, body));
   // Yatra's own voucher (it also reaches us through STAAH; the shared voucher number keeps them one booking).
   if (f.includes("yatra.com") || fwdFrom.includes("yatra.com") || f.includes("travelguru") || (/VOUCHER NUMBER/i.test(body) && /Yatra \(Travelguru\)/i.test(body))) return parseYatra(subject, body, year);
   // STAAH Max payment received / payment request: sent from the booking engine's address, so they are told apart first.
@@ -347,6 +355,6 @@ export function parseInboundEmail(from: string, rawSubject: string, html?: strin
   }
   if (looksStaah) return parseStaah(subject, body, year);
   if (looksSwiftbook) return parseSwiftbook(subject, body, year);
-  if (looksAirpay) { const r = parseAirpay(subject, body); const sent = forwardedSentAt(whole); if (sent) r.data.sent_at = sent; return r; }
+  if (looksAirpay) { const r = parseAirpay(subject, body); const sent = forwardedSentAt(whole); if (sent) r.data.sent_at = sent; return seen(r); }
   return { source: "unknown", kind: "unknown", external_ref: null, data: { preview: body.slice(0, 500) }, confidence: "low" };
 }

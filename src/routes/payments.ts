@@ -5,6 +5,7 @@ import { allowed } from "../auth";
 import { applyBp } from "../domain/money";
 import { loadBooking, paidOnBooking } from "../services/bookings";
 import { recordPayment, METHODS } from "../services/payments";
+import { rankStaysForPayment } from "../services/airpayMatch";
 
 const r = newRouter();
 const SALES_METHODS = ["upi", "bank", "card", "airpay"];
@@ -59,7 +60,10 @@ r.get("/gateway-inbox", requireCap("payments"), async (c) => {
     // Order-id prefix match: Airpay order ids start with the SwiftBook itinerary number.
     let match: any = null;
     if (d.order_id) match = await one(c.env.DB, `SELECT b.id, b.gross_paise, b.external_ref, g.name AS guest_name FROM bookings b JOIN guests g ON g.id = b.guest_id WHERE b.property_id = ? AND b.external_ref IS NOT NULL AND ? LIKE b.external_ref || '%' AND b.status NOT IN ('cancelled','no_show') ORDER BY b.created_at DESC LIMIT 1`, p.id, String(d.order_id));
-    out.push({ ...it, parsed: d, suggested_booking: match });
+    // No booking carries the order id: rank the open stays by who paid and the amount, for one-tap confirmation.
+    const candidates = match ? [] : (await rankStaysForPayment(c.env.DB, p.id, p.timezone, { amount_paise: d.amount_paise, payer_name: d.payer_name, payer_mobile: d.payer_mobile, payer_email: d.payer_email, paid_at: d.sent_at ?? it.received_at }))
+      .filter((x) => x.score >= 30).slice(0, 3).map((x) => ({ id: x.id, guest_name: x.guest_name, check_in: x.check_in, check_out: x.check_out, owing_paise: x.owing_paise, why: x.why }));
+    out.push({ ...it, parsed: d, suggested_booking: match, candidates });
   }
   return c.json({ items: out });
 });

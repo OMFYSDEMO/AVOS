@@ -11,6 +11,7 @@ import { recordPayment } from "./payments";
 import { hashLine, proposeMatch } from "../domain/recon";
 import { candidatesFor } from "../routes/recon";
 import { addDays } from "../domain/dates";
+import { rankStaysForPayment, confidentStay } from "./airpayMatch";
 
 /**
  * Inbox automation (W1). A parsed email is applied to the books the moment it arrives when every fact lines up;
@@ -163,21 +164,24 @@ export async function autoApply(db: D1Database, property: PropertyRow, item: { i
       let bk = await all<{ id: string; guest_name: string }>(db, "SELECT b.id, g.name AS guest_name FROM bookings b JOIN guests g ON g.id = b.guest_id WHERE b.property_id = ? AND b.external_ref IS NOT NULL AND ? LIKE b.external_ref || '%' AND b.status NOT IN ('cancelled','no_show') ORDER BY b.created_at DESC", property.id, String(d.order_id));
       // A STAAH Max payment also names the booking reference itself: the booking may carry that rather than the order id.
       if (!bk.length && d.booking_ref) bk = await all<{ id: string; guest_name: string }>(db, "SELECT b.id, g.name AS guest_name FROM bookings b JOIN guests g ON g.id = b.guest_id WHERE b.property_id = ? AND b.external_ref IS NOT NULL AND (b.external_ref = ? OR b.external_ref LIKE ? || '%') AND b.status NOT IN ('cancelled','no_show')", property.id, String(d.booking_ref), String(d.booking_ref));
-      // A payment link made by hand has an order id no booking carries: find the guest instead, by the mobile or
-      // email on the receipt, among stays still owing at least this much. Only one such stay may match.
-      if (!bk.length && (d.payer_mobile || d.payer_email)) {
-        const mobile = String(d.payer_mobile ?? "").replace(/\D/g, "").slice(-10);
-        const cands = await all<{ id: string; guest_name: string; owing: number }>(db, `SELECT b.id, g.name AS guest_name,
-            b.gross_paise - COALESCE((SELECT SUM(CASE WHEN kind='refund' THEN -amount_paise ELSE amount_paise END) FROM payments WHERE booking_id = b.id AND status != 'void'), 0) AS owing
-          FROM bookings b JOIN guests g ON g.id = b.guest_id JOIN channels ch ON ch.id = b.channel_id
-          WHERE b.property_id = ? AND b.status IN ('provisional','approved','checked_in') AND ch.collection_type != 'channel_collect' AND b.check_out >= ?
-            AND ((? != '' AND substr(replace(replace(replace(coalesce(g.phone,''),'+',''),' ',''),'-',''), -10) = ?) OR (? != '' AND lower(coalesce(g.email,'')) = lower(?)))`,
-          property.id, addDays(todayIn(property.timezone), -30), mobile, mobile, String(d.payer_email ?? ""), String(d.payer_email ?? ""));
-        const fits = cands.filter((x) => x.owing >= Number(d.amount_paise));
-        if (fits.length === 1) bk = [{ id: fits[0].id, guest_name: fits[0].guest_name }];
-        else if (cands.length > 1) return { applied: false, note: `${d.payer_name ?? "the payer"} has ${cands.length} open stays: the payment may cover more than one (merge them into one booking if it is one stay), then record it on the Payments screen` };
+      // A payment link made by hand (or a booking made in AVOS) has an order id no booking carries: rank the stays still
+      // owing money by who paid (mobile, email, name) and the amount, and post only when one stay matches on who paid.
+      let suggestion = "";
+      if (!bk.length) {
+        const arrivedAt = (await one<{ received_at: string }>(db, "SELECT received_at FROM inbox_items WHERE id = ?", item.id))?.received_at ?? null;
+        const clues = { amount_paise: Number(d.amount_paise), payer_name: d.payer_name as string, payer_mobile: d.payer_mobile as string, payer_email: d.payer_email as string, paid_at: (d.sent_at as string) ?? arrivedAt };
+        const cands = await rankStaysForPayment(db, property.id, property.timezone, clues);
+        const sure = confidentStay(cands);
+        if (sure) bk = [{ id: sure.id, guest_name: sure.guest_name }];
+        else {
+          // The same payer on several stays, none owing the whole amount: one payment for stays booked separately.
+          const loose = (await rankStaysForPayment(db, property.id, property.timezone, { ...clues, amount_paise: null })).filter((c) => c.identity === "mobile" || c.identity === "email" || c.identity === "name");
+          if (loose.length > 1 && !cands.some((c) => c.identity === "mobile" || c.identity === "email" || c.identity === "name")) return { applied: false, note: `${d.payer_name ?? "the payer"} has ${loose.length} open stays: the payment may cover more than one (merge them into one booking if it is one stay), then record it on the Payments screen` };
+          const top = cands.slice(0, 3).map((c) => `${c.guest_name} ${c.check_in} (${c.why.join(", ")})`);
+          suggestion = top.length ? `; likely: ${top.join(" · ")}` : "";
+        }
       }
-      if (bk.length !== 1) return { applied: false, note: bk.length ? "order matches more than one stay" : "no stay matches the order id or the payer's mobile/email: confirm or dismiss on the Payments screen" };
+      if (bk.length !== 1) return { applied: false, note: bk.length ? "order matches more than one stay" : `no stay matches the order id or who paid: pick the stay on the Payments screen${suggestion}` };
       // Dated the day the guest paid: the receipt's own send time (a forward carries it), else when the email arrived.
       const arrived = await one<{ received_at: string }>(db, "SELECT received_at FROM inbox_items WHERE id = ?", item.id);
       const paidAt = Date.parse(String(d.sent_at ?? arrived?.received_at ?? ""));

@@ -131,6 +131,39 @@ describe("Inbox automation", () => {
     expect((await sql("SELECT booking_id, amount_paise FROM payments WHERE reference = '1106499'"))[0]).toEqual({ booking_id: bk.booking.id, amount_paise: 2310000 });
   });
 
+  it("reads Airpay's own receipt from its HTML when the plain-text part is only a stub", async () => {
+    const html = `<html><head><style>.x{color:red}</style></head><body><table><tr><td>INR 30000.00</td></tr><tr><td>Collected Successfully</td></tr><tr><td>Order ID</td><td>1108899</td></tr><tr><td>Customer Name</td><td>HTML PAYER</td></tr><tr><td>Mobile No</td><td>919811122233</td></tr><tr><td>Order Amount</td><td>INR 30000.00</td></tr><tr><td>Airpay Id</td><td>2095999001</td></tr></table><a href="https://nps.airpay.co.in/view.php?id=5">view</a></body></html>`;
+    const p = parseInboundEmail("noreply@airpay.co.in", "Congratulations! Order ID 1108899 Transaction is Successful", html, "If you cannot see this email, please view it in your browser.");
+    expect(p.confidence).toBe("high");
+    expect(p.data).toMatchObject({ order_id: "1108899", airpay_id: "2095999001", amount_paise: 3000000, payer_name: "HTML PAYER", payer_mobile: "919811122233", success: true });
+    // An unreadable receipt keeps what the reader saw, so the layout can be taught.
+    const bad = parseInboundEmail("noreply@airpay.co.in", "Congratulations! Order ID 1108898 Transaction is Successful", undefined, "Something Airpay has never sent before");
+    expect(bad.confidence).toBe("low");
+    expect((bad.data.seen as any).preview).toContain("never sent before");
+  });
+
+  it("matches a link payment by the payer's name, and offers the likely stays when it cannot be sure", async () => {
+    const receipt = (order: string, amount: string, name: string, id: string) => ({ from: "noreply@airpay.co.in", subject: `Congratulations! Order ID ${order} Transaction is Successful`, text: `INR ${amount}\nCollected Successfully\nOrder ID\t${order}\nCustomer Name\t${name}\nOrder Amount\tINR ${amount}\nAirpay Id\t${id}\nhttps://nps.airpay.co.in/view.php?id=8` });
+    // A booking made in AVOS: no reference, and the guest's phone is not the payer's.
+    const arun = await ok("prachi", "POST", "/api/bookings", { guest_name: "Arun Menon", guest_phone: "9811100001", channel_code: "direct", check_in: "2027-12-26", check_out: "2027-12-28", rooms: [{ room_id: "loc_r1", nightly_rate_paise: 1200000 }] });
+    const a = await ok("prachi", "POST", "/api/inbox/ingest", receipt("1108901", "20000.00", "MR ARUN MENON", "2095999101"));
+    expect(a.auto.what).toBe("paid");
+    expect((await sql("SELECT booking_id, amount_paise FROM payments WHERE reference = '1108901'"))[0]).toEqual({ booking_id: arun.booking.id, amount_paise: 2000000 });
+    // Two stays owing exactly the amount, and a payer whose name matches neither: nothing is posted; both are offered.
+    const s1 = await ok("prachi", "POST", "/api/bookings", { guest_name: "Same Amount One", guest_phone: "9811100002", channel_code: "direct", check_in: "2027-12-10", check_out: "2027-12-11", rooms: [{ room_id: "loc_r2", nightly_rate_paise: 500000 }] });
+    const s2 = await ok("prachi", "POST", "/api/bookings", { guest_name: "Same Amount Two", guest_phone: "9811100003", channel_code: "direct", check_in: "2027-12-12", check_out: "2027-12-13", rooms: [{ room_id: "loc_r2", nightly_rate_paise: 500000 }] });
+    const gross = (await ok("prachi", "GET", `/api/bookings/${s1.booking.id}`)).booking.gross_paise;
+    const b = await ok("prachi", "POST", "/api/inbox/ingest", receipt("1108902", (gross / 100).toFixed(2), "SOMEONE ELSE", "2095999102"));
+    expect(b.auto.applied).toBe(false);
+    expect(b.auto.note).toMatch(/Same Amount One/); expect(b.auto.note).toMatch(/Same Amount Two/);
+    const card = (await ok("sindhu", "GET", "/api/payments/gateway-inbox")).items.find((i: any) => i.id === b.id);
+    expect(card.candidates.map((c: any) => c.id)).toEqual(expect.arrayContaining([s1.booking.id, s2.booking.id]));
+    expect(card.candidates[0].why).toContain("amount is the balance due");
+    // The desk picks the stay: the payment lands there.
+    await ok("sindhu", "POST", "/api/payments", { booking_id: s2.booking.id, method: "airpay", amount_paise: gross, reference: "1108902", inbox_item_id: b.id });
+    expect((await sql("SELECT booking_id FROM payments WHERE reference = '1108902'"))[0].booking_id).toBe(s2.booking.id);
+  });
+
   it("never takes a failed or pending Airpay attempt for a payment", async () => {
     const mail = (subject: string, head: string) => parseInboundEmail("noreply@airpay.co.in", subject, undefined, `${head}\nOrder ID\n179000000000999\nCustomer Name\nSOME GUEST\nOrder Amount\nINR 5250.00\nAirpay Id\n2099999003\nhttps://nps.airpay.co.in/view.php?id=3`);
     for (const [subject, head] of [["Order ID 179000000000999 Transaction is Unsuccessful", "INR 5250.00\nTransaction Unsuccessful"], ["Order ID 179000000000999 Transaction Failed", "INR 5250.00\nPayment failed"], ["Order ID 179000000000999 Transaction Pending", "INR 5250.00\nYour transaction is pending"]]) {
