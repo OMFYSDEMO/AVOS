@@ -1,6 +1,7 @@
 import { slabBpForRoomNight } from "../domain/gst";
 import { all, one } from "../db";
 import { periodRange } from "../domain/dates";
+import { applyBp } from "../domain/money";
 
 /** Revenue for a period, recognised on books_date (= check-out), ex-GST, net of credit notes. */
 export async function revenueSummary(db: D1Database, propertyId: string, period: string) {
@@ -85,6 +86,12 @@ export async function gstSheet(db: D1Database, propertyId: string, period: strin
   const credits = await all<any>(db, "SELECT kind, status, SUM(amount_paise) AS amount_paise, COUNT(*) AS n FROM statutory_credits WHERE property_id = ? AND period = ? GROUP BY kind, status", propertyId, period);
   const { from, to } = periodRange(period);
   const purchaseGst = await one<any>(db, "SELECT COALESCE(SUM(gst_paise),0) AS gst_paise, COUNT(*) AS n FROM expenses WHERE property_id = ? AND voided_at IS NULL AND gst_paise > 0 AND on_date BETWEEN ? AND ?", propertyId, from, to);
+  // Reverse charge: a foreign OTA's commission and payment charge, deducted from a payout settled this month
+  // (the date the OTA took its charges is the time of supply for an import of services).
+  const rcmRows = await all<any>(db, `SELECT s.id, s.payout_ref, s.payout_on, ch.name AS channel, ch.commission_rcm_bp AS bp, s.commission_paise + s.payment_fee_paise AS value_paise
+     FROM settlements s JOIN channels ch ON ch.id = s.channel_id
+     WHERE s.property_id = ? AND s.status = 'settled' AND ch.commission_rcm_bp > 0 AND s.payout_on BETWEEN ? AND ? ORDER BY s.payout_on`, propertyId, from, to);
+  const rcmLines = rcmRows.map((r) => ({ settlement_id: r.id, channel: r.channel, payout_ref: r.payout_ref, payout_on: r.payout_on, rate_pct: r.bp / 100, value_paise: r.value_paise, igst_paise: applyBp(r.value_paise, r.bp) }));
   const changeLog = await all<any>(db, "SELECT id, actor_email, action, entity, entity_id, before_json, after_json, at FROM audit_log WHERE property_id = ? AND substr(at,1,7) = ? AND action LIKE '%.update' OR (property_id = ? AND substr(at,1,7) = ? AND action LIKE '%.void') ORDER BY at", propertyId, period, propertyId, period);
   return {
     period,
@@ -94,6 +101,12 @@ export async function gstSheet(db: D1Database, propertyId: string, period: strin
     tcs: credits.filter((c) => c.kind === "tcs"), tds: credits.filter((c) => c.kind === "tds"),
     input_gst_on_purchases: { ...purchaseGst, note: "Not creditable while rooms are supplied at the 5% slab; shown for the register." },
     advances_received_for_future_stays: rev.advances_for_future_stays,
+    reverse_charge: {
+      lines: rcmLines,
+      value_paise: rcmLines.reduce((t, l) => t + l.value_paise, 0),
+      igst_paise: rcmLines.reduce((t, l) => t + l.igst_paise, 0),
+      note: "IGST on the foreign OTA's commission and payment charge (import of services), paid by the hotel in cash: GSTR-3B table 3.1(d). Input credit (table 4A(2)) only as far as the CA confirms: rooms at the 5% slab carry none.",
+    },
     change_log: changeLog,
   };
 }

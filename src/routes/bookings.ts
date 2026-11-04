@@ -53,7 +53,7 @@ r.get("/:id", requireCap("bookings_read"), async (c) => {
   const paid = await paidOnBooking(c.env.DB, bk.id);
   // OTA commercial terms and gateway fees are the revenue desk's, owner's and CA's; the desks see the stay and what was collected.
   if (!allowed(c.get("actor"), "finance")) {
-    for (const k of ["commission_bp", "commission_gst_bp", "commission_base", "payment_fee_bp", "payment_fee_base", "tcs_bp", "tds_bp"]) delete (channel as any)?.[k];
+    for (const k of ["commission_bp", "commission_gst_bp", "commission_rcm_bp", "commission_base", "payment_fee_bp", "payment_fee_base", "tcs_bp", "tds_bp"]) delete (channel as any)?.[k];
     for (const pay of payments as any[]) delete pay.fee_expense_id;
   }
   return c.json({ booking: bk, guest, channel, rooms, payments, invoices, approvals, audit, paid_paise: paid, balance_paise: bk.gross_paise - paid });

@@ -24,7 +24,7 @@ r.get("/ref", async (c) => {
   const p = c.get("property");
   const [locations, channels, accounts, users, rateCards, equipment] = await Promise.all([
     all(c.env.DB, "SELECT id, kind, code, name, sort FROM locations WHERE property_id = ? AND active = 1 ORDER BY kind DESC, sort", p.id),
-    all(c.env.DB, "SELECT id, code, name, collection_type, commission_bp, commission_gst_bp, payment_fee_bp, tcs_bp, tds_bp FROM channels WHERE property_id = ? AND active = 1", p.id),
+    all(c.env.DB, "SELECT id, code, name, collection_type, commission_bp, commission_gst_bp, commission_rcm_bp, payment_fee_bp, tcs_bp, tds_bp FROM channels WHERE property_id = ? AND active = 1", p.id),
     all(c.env.DB, "SELECT id, kind, name, holder_role, is_default, account_no FROM money_accounts WHERE property_id = ? AND active = 1 ORDER BY kind, is_default DESC, name", p.id),
     all(c.env.DB, "SELECT id, name, role FROM users WHERE property_id = ? AND active = 1", p.id),
     all(c.env.DB, "SELECT id, room_id, name, rate_paise, from_date, to_date, priority FROM rate_cards WHERE property_id = ? ORDER BY room_id, priority", p.id),
@@ -34,7 +34,7 @@ r.get("/ref", async (c) => {
   const fin = allowed(c.get("actor"), "finance");
   if (!fin) {
     for (const a of accounts as any[]) delete a.account_no;
-    for (const ch of channels as any[]) { delete ch.commission_bp; delete ch.commission_gst_bp; delete ch.payment_fee_bp; delete ch.tcs_bp; delete ch.tds_bp; }
+    for (const ch of channels as any[]) { delete ch.commission_bp; delete ch.commission_gst_bp; delete ch.commission_rcm_bp; delete ch.payment_fee_bp; delete ch.tcs_bp; delete ch.tds_bp; }
   }
   return c.json({ locations, equipment, channels, accounts, users, rate_cards: rateCards, expense_categories: EXPENSE_CATEGORIES, expense_families: EXPENSE_FAMILIES, common_categories: { petty: COMMON_PETTY, bank: COMMON_BANK } });
 });
@@ -276,7 +276,7 @@ admin.patch("/channels/:id", async (c) => {
   const ch: any = await one(c.env.DB, "SELECT * FROM channels WHERE id = ? AND property_id = ?", c.req.param("id"), p.id);
   if (!ch) throw new HttpError(404, "channel not found");
   const after: Record<string, unknown> = {};
-  for (const k of ["commission_bp", "commission_gst_bp", "payment_fee_bp", "tcs_bp", "tds_bp"]) if (x[k] !== undefined) after[k] = int(x[k], k, { min: 0, max: 5000 });
+  for (const k of ["commission_bp", "commission_gst_bp", "commission_rcm_bp", "payment_fee_bp", "tcs_bp", "tds_bp"]) if (x[k] !== undefined) after[k] = int(x[k], k, { min: 0, max: 5000 });
   for (const k of ["commission_base", "payment_fee_base", "tcs_base", "tds_base"]) if (x[k] !== undefined) after[k] = oneOf(x[k], k, ["ex_gst", "gross"] as const);
   if (x.collection_type !== undefined) after.collection_type = oneOf(x.collection_type, "collection_type", ["direct", "channel_collect", "hotel_collect"] as const);
   if (x.name !== undefined) after.name = str(x.name, "name");

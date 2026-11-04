@@ -162,6 +162,7 @@ The top of the screen shows the month's three steps (pre-close, lock, GST filed)
 
 ### GST filing sheet
 - Taxable value by slab (nil up to ₹1,000 per room-night, 5% up to ₹7,500, 18% above), output GST, TCS to accept from the OTAs, TDS for 26AS, credit notes and advances. Everything is computed from the books; nothing is typed in.
+- **GST under reverse charge (RCM)**: Booking.com B.V. invoices its commission and payment charge from the Netherlands without GST and takes them out of the payout. The hotel pays 18% IGST on those charges itself (GSTR-3B table 3.1(d)). The sheet lists each Booking.com payout settled in the month with its charges and the IGST, in the month the payout was received. Input credit only as you confirm: rooms at the 5% slab carry none. The rate is a channel term under Settings (Channels · payout terms → GST under reverse charge %).
 - The top row shows output GST payable, the taxable value and the filing status. Once the month is locked, **Mark filed** appears there; press it after filing.
 - **Corrections in the month** counts records edited or voided after they were made; open the Change log to review them before filing.
 

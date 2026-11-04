@@ -34,6 +34,28 @@ describe("GST on OTA commission", () => {
     expect(exp).toEqual({ amount_paise: 212400, gst_rate_bp: 1800, gst_paise: 32400 });
   });
 
+  it("reverse charge on a foreign OTA's commission: not deducted from the payout, shown on the GST sheet", async () => {
+    const ref = await ok("shaji", "GET", "/api/ref");
+    const bcom = ref.channels.find((c: any) => c.code === "booking_com");
+    await ok("shaji", "PATCH", `/api/admin/channels/${bcom.id}`, { commission_rcm_bp: 1800 });
+    expect((await ok("prachi", "GET", "/api/ref")).channels.some((c: any) => "commission_rcm_bp" in c)).toBe(false);
+    const b = await ok("prachi", "POST", "/api/bookings", { guest_name: "Bcom RCM Guest", guest_phone: "9500000084", channel_code: "booking_com", external_ref: "BC-RCM-1", check_in: "2027-09-01", check_out: "2027-09-02", rooms: [{ room_id: "loc_r4", nightly_rate_paise: 1000000 }] });
+    const prev = await ok("trupti", "POST", "/api/settlements", { channel_code: "booking_com", booking_ids: [b.booking.id], preview: true });
+    // The payout is gross less commission and payment charge only: the RCM is the hotel's to pay, not Booking.com's to deduct.
+    expect(prev.preview.commissionGstPaise).toBe(0);
+    expect(prev.preview.expectedPaise).toBe(prev.preview.grossPaise - prev.preview.commissionPaise - prev.preview.paymentFeePaise - prev.preview.tcsPaise - prev.preview.tdsPaise);
+    const s = await ok("trupti", "POST", "/api/settlements", { channel_code: "booking_com", booking_ids: [b.booking.id], payout_ref: "BCOM-RCM-PAY", payout_on: "2027-10-02" });
+    await ok("trupti", "POST", `/api/settlements/${s.id}/settle`, {});
+    const charges = prev.preview.commissionPaise + prev.preview.paymentFeePaise;
+    const sheet = await ok("ca", "GET", "/api/close/2027-10/gst");
+    expect(sheet.reverse_charge.lines).toEqual([expect.objectContaining({ payout_ref: "BCOM-RCM-PAY", value_paise: charges, rate_pct: 18, igst_paise: Math.round(charges * 0.18) })]);
+    expect(sheet.reverse_charge.igst_paise).toBe(Math.round(charges * 0.18));
+    // It falls in the month the payout was settled, not the stay's month.
+    expect((await ok("ca", "GET", "/api/close/2027-09/gst")).reverse_charge.lines).toEqual([]);
+    // Indian OTAs charge their own GST: no reverse charge for them.
+    expect(sheet.reverse_charge.lines.some((l: any) => l.channel === "Agoda")).toBe(false);
+  });
+
   it("refuses a payout received before the bank's opening balance, which already holds it", async () => {
     await sql("UPDATE money_accounts SET opening_date = '2027-08-15' WHERE id = 'acc_bank'");
     const b = await ok("prachi", "POST", "/api/bookings", { guest_name: "Old Payout Guest", guest_phone: "9500000083", channel_code: "agoda", external_ref: "AG-777003", check_in: "2027-08-01", check_out: "2027-08-02", rooms: [{ room_id: "loc_r1", nightly_rate_paise: 1000000 }] });
