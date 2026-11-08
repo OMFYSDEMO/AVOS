@@ -180,6 +180,17 @@ describe("Inbox automation", () => {
     expect(p.data).toMatchObject({ account_last: "3390", direction: "debited", amount_paise: 123400, on_date: "2027-11-03", at_time: "18:21:11", method: "NEFT", reference: "IDFB0000T0000002", counterparty: "TEST PAYEE", balance_paise: 52305411 });
   });
 
+  it("answers a re-delivered email (same Message-ID) as received, without a second card or an error", async () => {
+    const mail = { from: "noreply@mybookingsite.io", subject: "(Confirmed) Redelivery Test Reservation No:1060900000199999-The Meadows Varkala", text: "Booking Confirmation\nBooking ID 1060900000199999\nGuest Information\nRedelivery Test", message_id: "<redelivered-once@zoho>" };
+    const first = await api("prachi", "POST", "/api/inbox/ingest", mail);
+    expect(first.status).toBe(201);
+    const again = await api("prachi", "POST", "/api/inbox/ingest", mail);
+    expect(again.status).toBe(201);
+    expect(again.json.id).toBe(first.json.id);
+    expect(again.json.redelivered).toBe(true);
+    expect((await sql("SELECT COUNT(*) AS n FROM inbox_items WHERE message_id = '<redelivered-once@zoho>'"))[0].n).toBe(1);
+  });
+
   it("never takes a failed or pending Airpay attempt for a payment", async () => {
     const mail = (subject: string, head: string) => parseInboundEmail("noreply@airpay.co.in", subject, undefined, `${head}\nOrder ID\n179000000000999\nCustomer Name\nSOME GUEST\nOrder Amount\nINR 5250.00\nAirpay Id\n2099999003\nhttps://nps.airpay.co.in/view.php?id=3`);
     for (const [subject, head] of [["Order ID 179000000000999 Transaction is Unsuccessful", "INR 5250.00\nTransaction Unsuccessful"], ["Order ID 179000000000999 Transaction Failed", "INR 5250.00\nPayment failed"], ["Order ID 179000000000999 Transaction Pending", "INR 5250.00\nYour transaction is pending"]]) {

@@ -146,6 +146,13 @@ async function applyAutomation(env: Env, propertyId: string, iid: string, status
 
 /** Shared with the Email Worker: store an inbound email as an inbox item (duplicates flagged, payments routed), then apply it. */
 export async function ingestEmail(env: Env, propertyId: string, msg: { message_id: string | null; from: string; subject: string; html?: string; text?: string; raw?: ArrayBuffer | null; received_at?: string }) {
+  // A mail server re-delivers when it is unsure the first delivery landed (Zoho retries for days). The same message
+  // must be answered as delivered, never refused: a refusal is a failure to the sender, which retries again and may
+  // switch the forwarding off.
+  if (msg.message_id) {
+    const seen = await one<{ id: string; status: string; booking_id: string | null; payment_id: string | null }>(env.DB, "SELECT id, status, booking_id, payment_id FROM inbox_items WHERE property_id = ? AND message_id = ?", propertyId, msg.message_id);
+    if (seen) return { id: seen.id, status: seen.status, booking_id: seen.booking_id, payment_id: seen.payment_id, auto: null, parsed: null, redelivered: true as const };
+  }
   const parsed = parseInboundEmail(msg.from, msg.subject, msg.html, msg.text);
   const iid = id("inb");
   // Keep the original: the .eml from Email Routing, or the pasted text, so the item can be re-read after a parser update.
