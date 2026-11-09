@@ -16,9 +16,8 @@ The app's hostname is `app.shajianandan.com` (`avos.shajianandan.com` was the pi
 ## 2. Install the tooling on your computer
 
 ```sh
-git clone https://github.com/OMFYSDEMO/TempleOpsApp.git avos
+git clone https://github.com/OMFYSDEMO/AVOS.git avos
 cd avos
-git checkout claude/confident-hamilton-x510u1
 npm install --legacy-peer-deps
 npx wrangler login            # opens a browser, authorises Wrangler against your account
 npx wrangler whoami           # confirm the account id shown is yours
@@ -51,7 +50,7 @@ Two ways. **A** needs nothing on your computer and is what later deploys use too
 
 1. Cloudflare dashboard → profile icon (top right) → **My Profile → API Tokens → Create Token → "Edit Cloudflare Workers" template**. Under *Permissions* add two rows: **Account · D1 · Edit** and **Account · Workers R2 Storage · Edit**. Under *Account Resources* pick your account. Create it and copy the token (shown once).
 2. **Workers & Pages → Overview**: copy the **Account ID** from the right-hand column.
-3. GitHub → the `TempleOpsApp` repository → **Settings → Secrets and variables → Actions → New repository secret**, twice: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
+3. GitHub → the `AVOS` repository → **Settings → Secrets and variables → Actions → New repository secret**, twice: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
 4. GitHub → **Actions → Deploy → Run workflow** (or just push a commit). The run takes about two minutes; the last step prints the `workers.dev` URL.
 
 **B. From your computer.**
